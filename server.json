@@ -1,0 +1,13 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.clarkthomas/clearlot",
+  "description": "HardwareHQ Clearlot: live hardware/MRO quotes for agents. x402-gated get_quote. Merchant checkout. No custody.",
+  "status": "active",
+  "version": "0.1.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://clearlot-hardware-hq.vercel.app/mcp"
+    }
+  ]
+}
