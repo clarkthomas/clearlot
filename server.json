@@ -1,9 +1,14 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.clarkthomas/clearlot",
-  "description": "HardwareHQ Clearlot: live hardware/MRO quotes for agents. x402-gated get_quote. Merchant checkout. No custody.",
+  "description": "HardwareHQ Clearlot: live hardware and MRO quotes for agents. Free supply scan. x402-gated get_quote on Base USDC. Merchant checkout. No inventory custody.",
   "status": "active",
   "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/clarkthomas/clearlot",
+    "source": "github"
+  },
+  "websiteUrl": "https://clearlot-hardware-hq.vercel.app",
   "remotes": [
     {
       "type": "streamable-http",

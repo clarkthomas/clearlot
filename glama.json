@@ -1,0 +1,9 @@
+{
+  "name": "Clearlot",
+  "description": "Live hardware/MRO quotes for agents. Merchant checkout. No custody.",
+  "category": "commerce",
+  "remote": {
+    "url": "https://clearlot-hardware-hq.vercel.app/mcp",
+    "transport": "streamable-http"
+  }
+}
