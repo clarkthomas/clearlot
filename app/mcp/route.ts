@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { TOOLS } from "@/lib/tools";
-import { db, hashSpec, id } from "@/lib/store";
+import { hashSpec, id, putIntent, getIntent, putQuote, getQuote, upsertPool } from "@/lib/store";
 import { searchCatalog } from "@/lib/catalog";
 import { challenge, paymentHeaderFrom, settlePayment } from "@/lib/x402";
 
@@ -23,9 +23,9 @@ async function runTool(name: string, args: any, req: NextRequest) {
     const spec = String(args.spec || "");
     const intent_id = id("i");
     const spec_hash = hashSpec(spec, args.mpn);
-    const rec = { intent_id, spec, mpn: args.mpn, quantity: Number(args.quantity || 1), max_price_usd: String(args.max_price_usd || "0"), ship_to_country: String(args.ship_to_country || "US"), deadline: String(args.deadline || new Date(Date.now() + 86400000).toISOString()), spec_hash, created_at: new Date().toISOString() };
-    db.intents.set(intent_id, rec);
-    return { intent_id, spec_hash, expires_at: rec.deadline };
+    const rec = { intent_id, spec, mpn: args.mpn, quantity: Number(args.quantity || 1), max_price_usd: String(args.max_price_usd || "0"), ship_to_country: String(args.ship_to_country || "US"), deadline: String(args.deadline || new Date(Date.now() + 86400000).toISOString()), spec_hash, vertical: String(args.vertical || "hardware"), created_at: new Date().toISOString() };
+    await putIntent(rec);
+    return { intent_id, spec_hash, vertical: rec.vertical, expires_at: rec.deadline };
   }
   if (name === "search_supply") {
     const query = String(args.query || "");
@@ -49,20 +49,19 @@ async function runTool(name: string, args: any, req: NextRequest) {
     }
     let spec = String(args.spec || "");
     let country = String(args.ship_to_country || "US");
-    if (args.intent_id && db.intents.get(args.intent_id)) {
-      const it = db.intents.get(args.intent_id)!;
-      spec = spec || it.spec;
-      country = it.ship_to_country;
+    if (args.intent_id) {
+      const it = await getIntent(args.intent_id);
+      if (it) { spec = spec || it.spec; country = it.ship_to_country; }
     }
     if (!spec) return { error: "spec or intent_id required" };
     const { offers, error } = await searchCatalog(spec, country);
     const quote_id = id("q");
     const expires_at = new Date(Date.now() + Number(process.env.QUOTE_TTL_SECONDS || 1800) * 1000).toISOString();
-    db.quotes.set(quote_id, { quote_id, intent_id: args.intent_id, expires_at, paid: true, offers });
+    await putQuote({ quote_id, intent_id: args.intent_id, expires_at, paid: true, offers });
     return { quote_id, expires_at, catalog_error: error || null, offers, settlement: args._settlement || null };
   }
   if (name === "open_checkout") {
-    const q = db.quotes.get(String(args.quote_id));
+    const q = await getQuote(String(args.quote_id));
     if (!q) return { error: "unknown quote" };
     if (new Date(q.expires_at).getTime() < Date.now()) return { error: "quote expired" };
     const offer = q.offers[Number(args.offer_index || 0)];
@@ -70,15 +69,17 @@ async function runTool(name: string, args: any, req: NextRequest) {
     return { checkout_url: offer.checkout_url || offer.product_url, merchant_domain: offer.merchant_domain };
   }
   if (name === "open_pool") {
-    const it = db.intents.get(String(args.intent_id));
+    const it = await getIntent(String(args.intent_id));
     if (!it) return { error: "unknown intent" };
     const min_quantity = Number(args.min_quantity || 2);
-    let pool = [...db.pools.values()].find((p) => p.spec_hash === it.spec_hash);
-    if (!pool) { pool = { pool_id: id("p"), spec_hash: it.spec_hash, min_quantity, intent_ids: [] }; db.pools.set(pool.pool_id, pool); }
-    if (!pool.intent_ids.includes(it.intent_id)) pool.intent_ids.push(it.intent_id);
-    const committed_qty = pool.intent_ids.reduce((n, iid) => n + (db.intents.get(iid)?.quantity || 0), 0);
+    const pool = await upsertPool(it.spec_hash, it.intent_id, min_quantity, it.vertical || "hardware");
+    let committed_qty = 0;
+    for (const iid of pool.intent_ids) {
+      const row = await getIntent(iid);
+      committed_qty += row?.quantity || 0;
+    }
     const met = committed_qty >= pool.min_quantity;
-    return { pool_id: pool.pool_id, spec_hash: pool.spec_hash, committed_qty, min_quantity: pool.min_quantity, status: met ? "threshold_met" : "open", signal: met ? "threshold_met" : "threshold_not_met", merchant_hint: null };
+    return { pool_id: pool.pool_id, spec_hash: pool.spec_hash, vertical: pool.vertical, committed_qty, min_quantity: pool.min_quantity, status: met ? "threshold_met" : "open", signal: met ? "threshold_met" : "threshold_not_met", merchant_hint: null };
   }
   throw new Error(`unknown tool ${name}`);
 }
