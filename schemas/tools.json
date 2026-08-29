@@ -1,0 +1,79 @@
+{
+  "name": "clearlot",
+  "version": "0.1.0",
+  "tools": [
+    {
+      "name": "post_intent",
+      "description": "Record a buy intent. Free. Does not charge or hold funds.",
+      "input_schema": {
+        "type": "object",
+        "required": ["spec", "quantity", "max_price_usd", "ship_to_country", "deadline"],
+        "properties": {
+          "spec": { "type": "string" },
+          "mpn": { "type": "string" },
+          "upid": { "type": "string" },
+          "quantity": { "type": "integer", "minimum": 1 },
+          "max_price_usd": { "type": "string" },
+          "max_is_total": { "type": "boolean", "default": false },
+          "ship_to_country": { "type": "string", "minLength": 2, "maxLength": 2 },
+          "deadline": { "type": "string", "format": "date-time" },
+          "agent_id": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "search_supply",
+      "description": "Unpriced, rate-limited supply scan. Results may be stale.",
+      "input_schema": {
+        "type": "object",
+        "required": ["query", "ship_to_country"],
+        "properties": {
+          "query": { "type": "string" },
+          "ship_to_country": { "type": "string", "minLength": 2, "maxLength": 2 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 5, "default": 5 }
+        }
+      }
+    },
+    {
+      "name": "get_quote",
+      "description": "Paid live quote. Requires x402 or API key. Hands back merchant checkout URLs. Does not place orders.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "intent_id": { "type": "string" },
+          "spec": { "type": "string" },
+          "quantity": { "type": "integer", "minimum": 1 },
+          "max_price_usd": { "type": "string" },
+          "ship_to_country": { "type": "string" },
+          "deadline": { "type": "string" }
+        }
+      },
+      "x402": { "price_usd": "0.05", "asset": "USDC" }
+    },
+    {
+      "name": "open_checkout",
+      "description": "Return a merchant checkout or product URL for a paid unexpired quote. Does not complete payment.",
+      "input_schema": {
+        "type": "object",
+        "required": ["quote_id"],
+        "properties": {
+          "quote_id": { "type": "string" },
+          "offer_index": { "type": "integer", "minimum": 0, "default": 0 }
+        }
+      }
+    },
+    {
+      "name": "open_pool",
+      "description": "Join or create an intent pool by spec hash. Signals threshold only. Does not collect deposits.",
+      "input_schema": {
+        "type": "object",
+        "required": ["intent_id", "min_quantity"],
+        "properties": {
+          "intent_id": { "type": "string" },
+          "min_quantity": { "type": "integer", "minimum": 2 }
+        }
+      },
+      "x402": { "price_usd": "0.25", "asset": "USDC" }
+    }
+  ]
+}
