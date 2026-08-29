@@ -4,67 +4,59 @@ import { db, hashSpec, id } from "@/lib/store";
 import { searchCatalog } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 const QUOTE_USD = process.env.QUOTE_PRICE_USD || "0.05";
 const PAY_TO = process.env.X402_PAY_TO || "";
 const QUOTE_OPEN = process.env.QUOTE_OPEN === "1";
 const NETWORK = process.env.X402_NETWORK || "base";
+const PROTOCOL = "2025-06-18";
 
-function json(data: unknown, status = 200) {
-  return NextResponse.json(data, { status });
-}
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Content-Type, Accept, MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID, payment-signature, PAYMENT-SIGNATURE, x-payment",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version",
+};
 
 function paid(req: NextRequest) {
   if (QUOTE_OPEN) return true;
-  const sig = req.headers.get("payment-signature") || req.headers.get("x-payment");
-  return Boolean(sig);
+  return Boolean(req.headers.get("payment-signature") || req.headers.get("PAYMENT-SIGNATURE") || req.headers.get("x-payment"));
 }
 
-async function callTool(name: string, args: any, req: NextRequest) {
+function mcpResult(id: unknown, result: unknown) {
+  return { jsonrpc: "2.0", id: id ?? 1, result };
+}
+
+function mcpError(id: unknown, message: string, code = -32000) {
+  return { jsonrpc: "2.0", id: id ?? 1, error: { code, message } };
+}
+
+function toolContent(data: unknown, isError = false) {
+  return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, isError };
+}
+
+async function runTool(name: string, args: any, req: NextRequest) {
   if (name === "post_intent") {
     const spec = String(args.spec || "");
     const intent_id = id("i");
     const spec_hash = hashSpec(spec, args.mpn);
-    const rec = {
-      intent_id,
-      spec,
-      mpn: args.mpn,
-      quantity: Number(args.quantity || 1),
-      max_price_usd: String(args.max_price_usd || "0"),
-      ship_to_country: String(args.ship_to_country || "US"),
-      deadline: String(args.deadline || new Date(Date.now() + 86400000).toISOString()),
-      spec_hash,
-      created_at: new Date().toISOString(),
-    };
+    const rec = { intent_id, spec, mpn: args.mpn, quantity: Number(args.quantity || 1), max_price_usd: String(args.max_price_usd || "0"), ship_to_country: String(args.ship_to_country || "US"), deadline: String(args.deadline || new Date(Date.now() + 86400000).toISOString()), spec_hash, created_at: new Date().toISOString() };
     db.intents.set(intent_id, rec);
     return { intent_id, spec_hash, expires_at: rec.deadline };
   }
-
   if (name === "search_supply") {
     const query = String(args.query || "");
     const country = String(args.ship_to_country || "US");
     const { offers, error } = await searchCatalog(query, country);
-    return {
-      priced: false,
-      error: error || null,
-      results: offers.slice(0, Number(args.limit || 5)).map((o) => ({
-        title: o.title,
-        merchant_domain: o.merchant_domain,
-        price_usd: o.unit_price_usd,
-        available: o.quantity_available !== 0,
-        product_url: o.product_url,
-      })),
-    };
+    return { priced: false, error: error || null, results: offers.slice(0, Number(args.limit || 5)).map((o) => ({ title: o.title, merchant_domain: o.merchant_domain, price_usd: o.unit_price_usd, available: o.quantity_available !== 0, product_url: o.product_url })) };
   }
-
   if (name === "get_quote") {
     if (!paid(req)) {
+      const body = { error: "Payment Required", x402Version: 1, accepts: [{ scheme: "exact", network: NETWORK, asset: "USDC", maxAmountRequired: String(Math.round(Number(QUOTE_USD) * 1e6)), payTo: PAY_TO || "set X402_PAY_TO", extra: { quote_price_usd: QUOTE_USD } }] };
       const err: any = new Error("Payment Required");
       err.http = 402;
-      err.body = {
-        error: "Payment Required",
-        accepts: [{ scheme: "exact", network: NETWORK, maxAmountRequired: String(Math.round(Number(QUOTE_USD) * 1e6)), asset: "USDC", payTo: PAY_TO || "set X402_PAY_TO", extra: { quote_price_usd: QUOTE_USD } }],
-      };
+      err.body = body;
       throw err;
     }
     let spec = String(args.spec || "");
@@ -81,7 +73,6 @@ async function callTool(name: string, args: any, req: NextRequest) {
     db.quotes.set(quote_id, { quote_id, intent_id: args.intent_id, expires_at, paid: true, offers });
     return { quote_id, expires_at, catalog_error: error || null, offers };
   }
-
   if (name === "open_checkout") {
     const q = db.quotes.get(String(args.quote_id));
     if (!q) return { error: "unknown quote" };
@@ -90,7 +81,6 @@ async function callTool(name: string, args: any, req: NextRequest) {
     if (!offer) return { error: "no offer" };
     return { checkout_url: offer.checkout_url || offer.product_url, merchant_domain: offer.merchant_domain };
   }
-
   if (name === "open_pool") {
     const it = db.intents.get(String(args.intent_id));
     if (!it) return { error: "unknown intent" };
@@ -105,34 +95,60 @@ async function callTool(name: string, args: any, req: NextRequest) {
     const met = committed_qty >= pool.min_quantity;
     return { pool_id: pool.pool_id, spec_hash: pool.spec_hash, committed_qty, min_quantity: pool.min_quantity, status: met ? "threshold_met" : "open", signal: met ? "threshold_met" : "threshold_not_met", merchant_hint: null };
   }
+  throw new Error(`unknown tool ${name}`);
+}
 
-  return { error: `unknown tool ${name}` };
+function respond(req: NextRequest, payload: unknown, status = 200, extra: Record<string, string> = {}) {
+  const accept = req.headers.get("accept") || "";
+  const headers = { ...cors, "MCP-Protocol-Version": PROTOCOL, ...extra };
+  if (accept.includes("text/event-stream") && !accept.includes("application/json")) {
+    const sse = `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
+    return new NextResponse(sse, { status, headers: { ...headers, "Content-Type": "text/event-stream" } });
+  }
+  return NextResponse.json(payload, { status, headers });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: cors });
+}
+
+export async function GET(req: NextRequest) {
+  const accept = req.headers.get("accept") || "";
+  if (accept.includes("text/event-stream")) {
+    return new NextResponse(`: clearlot ready\n\n`, { status: 200, headers: { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "MCP-Protocol-Version": PROTOCOL } });
+  }
+  return NextResponse.json({ name: "clearlot", transport: "streamable-http", protocolVersion: PROTOCOL, tools: TOOLS.map((t) => t.name) }, { headers: cors });
+}
+
+export async function DELETE() {
+  return new NextResponse(null, { status: 204, headers: cors });
 }
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
-  if (!body) return json({ jsonrpc: "2.0", error: { message: "invalid json" } }, 400);
-  if (body.method === "tools/list" || body.method === "initialize") {
-    return json({
-      jsonrpc: "2.0",
-      id: body.id ?? 1,
-      result: body.method === "initialize"
-        ? { protocolVersion: "2025-03-26", serverInfo: { name: "clearlot", version: "0.1.0" }, capabilities: { tools: {} } }
-        : { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) },
-    });
+  if (!body) return respond(req, mcpError(null, "invalid json"), 400);
+  const method = body.method as string;
+  const rpcId = body.id ?? 1;
+  if (method === "initialize") {
+    return respond(req, mcpResult(rpcId, { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "clearlot", version: "0.1.0", title: "Clearlot" }, instructions: "Hardware/MRO intent tape. post_intent and search_supply are free. get_quote is x402 gated. Merchant checkout. No merchandise custody." }), 200, { "Mcp-Session-Id": id("sess") });
   }
-  if (body.method === "tools/call") {
+  if (method === "notifications/initialized" || method === "notifications/cancelled") {
+    return new NextResponse(null, { status: 202, headers: cors });
+  }
+  if (method === "ping") return respond(req, mcpResult(rpcId, {}));
+  if (method === "tools/list") {
+    return respond(req, mcpResult(rpcId, { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) }));
+  }
+  if (method === "resources/list") return respond(req, mcpResult(rpcId, { resources: [] }));
+  if (method === "prompts/list") return respond(req, mcpResult(rpcId, { prompts: [] }));
+  if (method === "tools/call") {
     try {
-      const result = await callTool(body.params?.name, body.params?.arguments || {}, req);
-      return json({ jsonrpc: "2.0", id: body.id ?? 1, result });
+      const data = await runTool(body.params?.name, body.params?.arguments || {}, req);
+      return respond(req, mcpResult(rpcId, toolContent(data)));
     } catch (e: any) {
-      if (e.http === 402) return json({ jsonrpc: "2.0", id: body.id ?? 1, error: e.body }, 402);
-      return json({ jsonrpc: "2.0", id: body.id ?? 1, error: { message: String(e) } }, 500);
+      if (e.http === 402) return respond(req, mcpResult(rpcId, toolContent(e.body, true)), 402);
+      return respond(req, mcpResult(rpcId, toolContent({ error: String(e.message || e) }, true)), 200);
     }
   }
-  return json({ jsonrpc: "2.0", id: body.id ?? 1, error: { message: "unknown method" } }, 400);
-}
-
-export async function GET() {
-  return json({ name: "clearlot", tools: TOOLS.map((t) => t.name) });
+  return respond(req, mcpError(rpcId, `unknown method ${method}`), 400);
 }
