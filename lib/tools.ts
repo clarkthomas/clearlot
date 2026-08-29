@@ -13,6 +13,7 @@ export const TOOLS = [
         ship_to_country: { type: "string" },
         deadline: { type: "string" },
         agent_id: { type: "string" },
+        vertical: { type: "string", description: "hardware | marine | drone | electronics" },
       },
     },
   },
