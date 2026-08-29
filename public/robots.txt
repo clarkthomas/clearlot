@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Allow: /.well-known/
+Allow: /mcp
+Allow: /llms.txt
+Allow: /agent-profile.json
+Sitemap: https://clearlot-hardware-hq.vercel.app/sitemap.xml
