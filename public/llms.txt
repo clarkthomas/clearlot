@@ -1,0 +1,4 @@
+# Clearlot
+MCP: https://clearlot-hardware-hq.vercel.app/mcp
+Card: https://clearlot-hardware-hq.vercel.app/mcp/server-card
+Tools: post_intent, search_supply, get_quote, open_checkout, open_pool
