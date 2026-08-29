@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const QUOTE_USD = process.env.QUOTE_PRICE_USD || "0.05";
-const PAY_TO = process.env.X402_PAY_TO || "";
+const PAY_TO = process.env.X402_PAY_TO || "0xfa722a8f9d927bc340405a9eab67958ab767e7f5";
 const QUOTE_OPEN = process.env.QUOTE_OPEN === "1";
 const NETWORK = process.env.X402_NETWORK || "base";
 const PROTOCOL = "2025-06-18";
@@ -53,7 +53,7 @@ async function runTool(name: string, args: any, req: NextRequest) {
   }
   if (name === "get_quote") {
     if (!paid(req)) {
-      const body = { error: "Payment Required", x402Version: 1, accepts: [{ scheme: "exact", network: NETWORK, asset: "USDC", maxAmountRequired: String(Math.round(Number(QUOTE_USD) * 1e6)), payTo: PAY_TO || "set X402_PAY_TO", extra: { quote_price_usd: QUOTE_USD } }] };
+      const body = { error: "Payment Required", x402Version: 1, accepts: [{ scheme: "exact", network: NETWORK, asset: "USDC", maxAmountRequired: String(Math.round(Number(QUOTE_USD) * 1e6)), payTo: PAY_TO, extra: { quote_price_usd: QUOTE_USD } }] };
       const err: any = new Error("Payment Required");
       err.http = 402;
       err.body = body;
