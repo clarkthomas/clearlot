@@ -5,23 +5,41 @@ const FACILITATOR = (process.env.X402_FACILITATOR_URL || "https://facilitator.pa
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const RESOURCE = "https://clearlot-hardware-hq.vercel.app/mcp";
 
+const bazaarInfo = {
+  input: {
+    type: "mcp",
+    toolName: "get_quote",
+    description: "Live hardware/MRO quote. Returns merchant offers. Does not place orders.",
+    transport: "streamable-http",
+    inputSchema: { type: "object", properties: { spec: { type: "string" }, intent_id: { type: "string" }, ship_to_country: { type: "string" }, quantity: { type: "integer" } } },
+  },
+  output: { type: "json", example: { quote_id: "q_x", offers: [{ merchant_domain: "example.com", unit_price_usd: "12.40" }] } },
+};
+
 export function requirements() {
   return {
     scheme: "exact",
     network: NETWORK,
     maxAmountRequired: String(Math.round(Number(QUOTE_USD) * 1e6)),
     resource: RESOURCE,
-    description: "Clearlot live hardware quote",
+    description: "Clearlot live hardware/MRO quote",
     mimeType: "application/json",
     payTo: PAY_TO,
     asset: USDC_BASE,
     maxTimeoutSeconds: 300,
     extra: { name: "USD Coin", version: "2", quote_price_usd: QUOTE_USD },
+    outputSchema: bazaarInfo,
   };
 }
 
 export function challenge() {
-  return { x402Version: 1, error: "Payment Required", accepts: [requirements()] };
+  return {
+    x402Version: 1,
+    error: "Payment Required",
+    accepts: [requirements()],
+    resource: { url: RESOURCE, description: "Clearlot live hardware/MRO quotes", mimeType: "application/json", serviceName: "Clearlot", tags: ["hardware", "mro", "mcp", "quotes"] },
+    extensions: { bazaar: { info: bazaarInfo } },
+  };
 }
 
 export function paymentHeaderFrom(req: { headers: { get(n: string): string | null } }) {
@@ -57,10 +75,5 @@ export async function settlePayment(header: string) {
     return { settled: false, reason: verify.json.invalidReason || verify.json.invalidMessage || "verify_failed", verify: verify.json, facilitator: FACILITATOR };
   }
   const settle = await postFacilitator("/settle", bodyA);
-  return {
-    settled: Boolean(settle.json?.success || settle.json?.transaction),
-    verify: verify.json,
-    settle: settle.json,
-    facilitator: FACILITATOR,
-  };
+  return { settled: Boolean(settle.json?.success || settle.json?.transaction || settle.json?.isValid), verify: verify.json, settle: settle.json, facilitator: FACILITATOR };
 }
