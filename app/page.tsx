@@ -2,140 +2,30 @@
 import { useEffect, useState } from "react";
 
 const PAY_TO = "0xfa722a8f9d927bc340405a9eab67958ab767e7f5";
-const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const USDBC = "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA";
-const AMOUNT = "50000";
-
-function hexRand32() {
-  const n = new Uint8Array(32);
-  crypto.getRandomValues(n);
-  return "0x" + Array.from(n).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-function b64(obj: unknown) {
-  return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
-}
-function tokenData(addr: string) {
-  return "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0");
-}
-function units(hex: string) {
-  try { return Number(BigInt(hex || "0x0")) / 1e6; } catch { return 0; }
-}
-
-async function rpcBal(token: string, addr: string) {
-  const res = await fetch("https://mainnet.base.org", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: token, data: tokenData(addr) }, "latest"] }),
-  });
-  const json = await res.json();
-  return units(json.result);
-}
 
 export default function Page() {
   const [query, setQuery] = useState("raspberry pi 5 kit");
   const [country, setCountry] = useState("US");
   const [out, setOut] = useState("Ready.");
-  const [paying, setPaying] = useState(false);
-  const [connected, setConnected] = useState("");
+  const [copied, setCopied] = useState("");
 
-  async function mcp(name: string, args: object, extra: Record<string, string> = {}) {
+  async function mcp(name: string, args: object) {
     const res = await fetch("/mcp", {
       method: "POST",
-      headers: { "content-type": "application/json", ...extra },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
     });
     const json = await res.json();
     setOut(JSON.stringify({ http: res.status, ...json }, null, 2));
-    return { res, json };
+    return json;
   }
 
-  async function payNickel() {
-    setPaying(true);
-    setOut("Connecting…");
+  async function copy(label: string, value: string) {
     try {
-      const eth = (window as any).ethereum;
-      if (!eth?.request) throw new Error("Open this page inside Base App browser, then tap Pay.");
-      const accounts: string[] = await eth.request({ method: "eth_requestAccounts" });
-      const from = accounts?.[0];
-      if (!from) throw new Error("No account connected.");
-      setConnected(from);
-      try { await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x2105" }] }); } catch {}
-
-      let baseUsdc = 0;
-      let baseUsdbc = 0;
-      try {
-        baseUsdc = await rpcBal(USDC, from);
-        baseUsdbc = await rpcBal(USDBC, from);
-      } catch {
-        const hex = await eth.request({ method: "eth_call", params: [{ to: USDC, data: tokenData(from) }, "latest"] });
-        baseUsdc = units(hex);
-      }
-
-      const nonce = hexRand32();
-      const authorization = {
-        from,
-        to: PAY_TO,
-        value: AMOUNT,
-        validAfter: "0",
-        validBefore: String(Math.floor(Date.now() / 1000) + 3600),
-        nonce,
-      };
-      const typed = {
-        types: {
-          EIP712Domain: [
-            { name: "name", type: "string" },
-            { name: "version", type: "string" },
-            { name: "chainId", type: "uint256" },
-            { name: "verifyingContract", type: "address" },
-          ],
-          TransferWithAuthorization: [
-            { name: "from", type: "address" },
-            { name: "to", type: "address" },
-            { name: "value", type: "uint256" },
-            { name: "validAfter", type: "uint256" },
-            { name: "validBefore", type: "uint256" },
-            { name: "nonce", type: "bytes32" },
-          ],
-        },
-        primaryType: "TransferWithAuthorization",
-        domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: USDC },
-        message: authorization,
-      };
-      setOut(JSON.stringify({
-        connected: from,
-        base_usdc: baseUsdc,
-        base_usdbc: baseUsdbc,
-        note: baseUsdc < 0.05 ? "This 0x has no native USDC on Base. Coinbase cash ≠ this address. Sign anyway or send 0.05 USDC on Base from the account that actually holds it." : "Signing $0.05 USDC",
-      }, null, 2));
-      const signature = await eth.request({
-        method: "eth_signTypedData_v4",
-        params: [from, JSON.stringify(typed)],
-      });
-      const payload = {
-        x402Version: 2,
-        scheme: "exact",
-        network: "eip155:8453",
-        accepted: {
-          scheme: "exact",
-          network: "eip155:8453",
-          amount: AMOUNT,
-          maxAmountRequired: AMOUNT,
-          asset: USDC,
-          payTo: PAY_TO,
-          extra: { name: "USD Coin", version: "2" },
-        },
-        payload: { signature, authorization },
-      };
-      const header = b64(payload);
-      await mcp(
-        "get_quote",
-        { spec: query, ship_to_country: country, quantity: 1, max_price_usd: "200" },
-        { "PAYMENT-SIGNATURE": header, "X-PAYMENT": header }
-      );
-    } catch (err: any) {
-      setOut((prev) => JSON.stringify({ paid: false, error: err?.message || String(err), previous: prev }, null, 2));
-    } finally {
-      setPaying(false);
+      await navigator.clipboard.writeText(value);
+      setCopied(label);
+    } catch {
+      setCopied("select-and-copy");
     }
   }
 
@@ -156,12 +46,22 @@ export default function Page() {
       <p style={{ color: "#b4b8bf", lineHeight: 1.5 }}>
         Intent tape for parts. Nickel for a live quote. Store gets paid for the part. Nothing ships here.
       </p>
-      {connected ? (
-        <p style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, color: "#f5c518", wordBreak: "break-all" }}>
-          Connected: {connected}
+      <div style={{ margin: "24px 0", padding: 16, border: "1px solid #2a313a", background: "#14181e" }}>
+        <p style={{ margin: "0 0 8px", fontWeight: 700 }}>Pay $0.05 USDC on Base</p>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "#b4b8bf" }}>
+          Use the Send screen in the account that already shows USDC. Do not open this page inside a wallet browser.
         </p>
-      ) : null}
-      <div style={{ display: "flex", gap: 8, margin: "24px 0", flexWrap: "wrap" }}>
+        <p style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, wordBreak: "break-all", margin: "0 0 8px" }}>
+          To: {PAY_TO}
+        </p>
+        <p style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, margin: "0 0 12px" }}>
+          Amount: 0.05 · Asset: USDC · Network: Base
+        </p>
+        <button onClick={() => copy("address", PAY_TO)} style={{ background: "#f5c518", color: "#0b0d10", border: 0, padding: "10px 14px", fontWeight: 700 }}>
+          {copied === "address" ? "Copied" : "Copy address"}
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 8, margin: "0 0 16px", flexWrap: "wrap" }}>
         <input value={query} onChange={(e) => setQuery(e.target.value)} style={{ background: "#14181e", color: "#e8eaed", border: "1px solid #2a313a", padding: "10px 12px", flex: 1 }} />
         <input value={country} onChange={(e) => setCountry(e.target.value)} style={{ background: "#14181e", color: "#e8eaed", border: "1px solid #2a313a", padding: "10px 12px", width: 72 }} />
       </div>
@@ -169,18 +69,8 @@ export default function Page() {
         <button onClick={() => mcp("search_supply", { query, ship_to_country: country })}>Search supply</button>
         <button onClick={() => mcp("post_intent", { spec: query, quantity: 1, max_price_usd: "200", ship_to_country: country, deadline: new Date(Date.now() + 86400000).toISOString() })}>Post intent</button>
         <button onClick={() => mcp("get_quote", { spec: query, ship_to_country: country, quantity: 1, max_price_usd: "200" })}>Get quote</button>
-        <button
-          onClick={payNickel}
-          disabled={paying}
-          style={{ background: "#f5c518", color: "#0b0d10", border: 0, padding: "10px 14px", fontWeight: 700 }}
-        >
-          {paying ? "Sign in wallet…" : "Pay $0.05 USDC"}
-        </button>
       </div>
       <pre style={{ marginTop: 24, background: "#14181e", padding: 16, overflow: "auto", fontSize: 12 }}>{out}</pre>
-      <p style={{ fontSize: 12, color: "#8b9098" }}>
-        We read native USDC on Base at the connected 0x. Coinbase cash is not that 0x.
-      </p>
     </main>
   );
 }
