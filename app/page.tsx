@@ -3,17 +3,32 @@ import { useEffect, useState } from "react";
 
 const PAY_TO = "0xfa722a8f9d927bc340405a9eab67958ab767e7f5";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const AMOUNT = "50000"; // 0.05 USDC
-const SITE = "https://clearlot-hardware-hq.vercel.app";
+const USDBC = "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA";
+const AMOUNT = "50000";
 
 function hexRand32() {
   const n = new Uint8Array(32);
   crypto.getRandomValues(n);
   return "0x" + Array.from(n).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-
 function b64(obj: unknown) {
   return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+}
+function tokenData(addr: string) {
+  return "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0");
+}
+function units(hex: string) {
+  try { return Number(BigInt(hex || "0x0")) / 1e6; } catch { return 0; }
+}
+
+async function rpcBal(token: string, addr: string) {
+  const res = await fetch("https://mainnet.base.org", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: token, data: tokenData(addr) }, "latest"] }),
+  });
+  const json = await res.json();
+  return units(json.result);
 }
 
 export default function Page() {
@@ -21,6 +36,7 @@ export default function Page() {
   const [country, setCountry] = useState("US");
   const [out, setOut] = useState("Ready.");
   const [paying, setPaying] = useState(false);
+  const [connected, setConnected] = useState("");
 
   async function mcp(name: string, args: object, extra: Record<string, string> = {}) {
     const res = await fetch("/mcp", {
@@ -35,42 +51,33 @@ export default function Page() {
 
   async function payNickel() {
     setPaying(true);
-    setOut("Connecting phone wallet…");
+    setOut("Connecting…");
     try {
       const eth = (window as any).ethereum;
-      if (!eth?.request) {
-        throw new Error("Open this page inside Base App browser, then tap Pay.");
-      }
+      if (!eth?.request) throw new Error("Open this page inside Base App browser, then tap Pay.");
       const accounts: string[] = await eth.request({ method: "eth_requestAccounts" });
       const from = accounts?.[0];
       if (!from) throw new Error("No account connected.");
-      try {
-        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x2105" }] });
-      } catch {}
+      setConnected(from);
+      try { await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x2105" }] }); } catch {}
 
-      const balHex = await eth.request({
-        method: "eth_call",
-        params: [{ to: USDC, data: "0x70a08231" + from.slice(2).toLowerCase().padStart(64, "0") }, "latest"],
-      });
-      const usdc = Number(BigInt(balHex || "0x0")) / 1e6;
-      if (usdc < 0.05) {
-        setOut(JSON.stringify({
-          paid: false,
-          connected: from,
-          usdc_on_base: usdc,
-          error: "This is the empty account. In Base App switch to the wallet that actually holds USDC, reload, tap Pay.",
-        }, null, 2));
-        return;
+      let baseUsdc = 0;
+      let baseUsdbc = 0;
+      try {
+        baseUsdc = await rpcBal(USDC, from);
+        baseUsdbc = await rpcBal(USDBC, from);
+      } catch {
+        const hex = await eth.request({ method: "eth_call", params: [{ to: USDC, data: tokenData(from) }, "latest"] });
+        baseUsdc = units(hex);
       }
 
       const nonce = hexRand32();
-      const validBefore = String(Math.floor(Date.now() / 1000) + 3600);
       const authorization = {
         from,
         to: PAY_TO,
         value: AMOUNT,
         validAfter: "0",
-        validBefore,
+        validBefore: String(Math.floor(Date.now() / 1000) + 3600),
         nonce,
       };
       const typed = {
@@ -94,7 +101,12 @@ export default function Page() {
         domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: USDC },
         message: authorization,
       };
-      setOut("Sign $0.05 USDC. No ETH. No Coinbase.com.");
+      setOut(JSON.stringify({
+        connected: from,
+        base_usdc: baseUsdc,
+        base_usdbc: baseUsdbc,
+        note: baseUsdc < 0.05 ? "This 0x has no native USDC on Base. Coinbase cash ≠ this address. Sign anyway or send 0.05 USDC on Base from the account that actually holds it." : "Signing $0.05 USDC",
+      }, null, 2));
       const signature = await eth.request({
         method: "eth_signTypedData_v4",
         params: [from, JSON.stringify(typed)],
@@ -121,11 +133,7 @@ export default function Page() {
         { "PAYMENT-SIGNATURE": header, "X-PAYMENT": header }
       );
     } catch (err: any) {
-      setOut(JSON.stringify({
-        paid: false,
-        error: err?.message || String(err),
-        hint: "You should see a SIGN sheet, not a send. If USDC shows $0, that connected account is empty — switch wallets in the app.",
-      }, null, 2));
+      setOut((prev) => JSON.stringify({ paid: false, error: err?.message || String(err), previous: prev }, null, 2));
     } finally {
       setPaying(false);
     }
@@ -148,6 +156,11 @@ export default function Page() {
       <p style={{ color: "#b4b8bf", lineHeight: 1.5 }}>
         Intent tape for parts. Nickel for a live quote. Store gets paid for the part. Nothing ships here.
       </p>
+      {connected ? (
+        <p style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, color: "#f5c518", wordBreak: "break-all" }}>
+          Connected: {connected}
+        </p>
+      ) : null}
       <div style={{ display: "flex", gap: 8, margin: "24px 0", flexWrap: "wrap" }}>
         <input value={query} onChange={(e) => setQuery(e.target.value)} style={{ background: "#14181e", color: "#e8eaed", border: "1px solid #2a313a", padding: "10px 12px", flex: 1 }} />
         <input value={country} onChange={(e) => setCountry(e.target.value)} style={{ background: "#14181e", color: "#e8eaed", border: "1px solid #2a313a", padding: "10px 12px", width: 72 }} />
@@ -166,7 +179,7 @@ export default function Page() {
       </div>
       <pre style={{ marginTop: 24, background: "#14181e", padding: 16, overflow: "auto", fontSize: 12 }}>{out}</pre>
       <p style={{ fontSize: 12, color: "#8b9098" }}>
-        Sign only. No ETH. If it says empty, Base App connected the wrong account — switch to the one with USDC.
+        We read native USDC on Base at the connected 0x. Coinbase cash is not that 0x.
       </p>
     </main>
   );
