@@ -34,16 +34,18 @@ function asOffers(payload: unknown, country: string): Offer[] {
     if (payload && typeof payload === "object" && "result" in (payload as object)) {
       const r = (payload as any).result;
       if (typeof r?.content?.[0]?.text === "string") parsed = JSON.parse(r.content[0].text);
-      else parsed = r;
+      else parsed = r?.structuredContent || r;
     }
   } catch {
     parsed = payload;
   }
-  const products = parsed?.products || parsed?.catalog?.products || parsed?.items || parsed?.results || [];
+  const products = parsed?.products || parsed?.structuredContent?.products || parsed?.catalog?.products || parsed?.items || parsed?.results || [];
   const list = Array.isArray(products) ? products : [];
   return list.slice(0, 8).map((p: any, i: number) => {
-    const url = p.url || p.product_url || p.online_store_url || p.link || "";
-    const price = minorToUsd(p.price) || minorToUsd(p.price_min) || minorToUsd(p?.price?.amount) || minorToUsd(p?.variants?.[0]?.price) || "";
+    const variant = Array.isArray(p.variants) ? p.variants[0] : null;
+    const url = variant?.url || p.url || p.product_url || p.online_store_url || p.link || "";
+    const priceRaw = variant?.price?.amount ?? p.price ?? p.price_min ?? p?.price?.amount ?? variant?.price;
+    const price = minorToUsd(priceRaw);
     let domain = "";
     try {
       domain = url ? new URL(url).hostname : p.shop || p.merchant || "";
@@ -55,7 +57,7 @@ function asOffers(payload: unknown, country: string): Offer[] {
       merchant_domain: domain,
       title: p.title || p.name || "Untitled",
       unit_price_usd: price || "n/a",
-      quantity_available: p.available === false ? 0 : p.quantity ?? null,
+      quantity_available: variant?.availability?.available === false || p.available === false ? 0 : p.quantity ?? null,
       ships_to: country,
       product_url: url,
       checkout_url: url,
