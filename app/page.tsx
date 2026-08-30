@@ -3,15 +3,17 @@ import { useEffect, useState } from "react";
 
 const PAY_TO = "0xfa722a8f9d927bc340405a9eab67958ab767e7f5";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const AMOUNT = 50_000n; // 0.05 USDC, 6 decimals
+const AMOUNT = "50000"; // 0.05 USDC
 const SITE = "https://clearlot-hardware-hq.vercel.app";
 
-function transferData(to: string, amount: bigint) {
-  return (
-    "0xa9059cbb" +
-    to.slice(2).toLowerCase().padStart(64, "0") +
-    amount.toString(16).padStart(64, "0")
-  );
+function hexRand32() {
+  const n = new Uint8Array(32);
+  crypto.getRandomValues(n);
+  return "0x" + Array.from(n).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function b64(obj: unknown) {
+  return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
 }
 
 export default function Page() {
@@ -20,74 +22,113 @@ export default function Page() {
   const [out, setOut] = useState("Ready.");
   const [paying, setPaying] = useState(false);
 
-  async function mcp(name: string, args: object) {
+  async function mcp(name: string, args: object, extra: Record<string, string> = {}) {
     const res = await fetch("/mcp", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...extra },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
     });
     const json = await res.json();
     setOut(JSON.stringify({ http: res.status, ...json }, null, 2));
-    return json;
+    return { res, json };
   }
 
   async function payNickel() {
     setPaying(true);
-    setOut("Requesting $0.05 USDC from the wallet on this phone…");
+    setOut("Connecting phone wallet…");
     try {
       const eth = (window as any).ethereum;
       if (!eth?.request) {
-        throw new Error(
-          "No wallet injected. Open Base App → browser → paste " + SITE + " → tap Pay. Do not use Grok or Coinbase.com."
-        );
+        throw new Error("Open this page inside Base App browser, then tap Pay.");
       }
       const accounts: string[] = await eth.request({ method: "eth_requestAccounts" });
       const from = accounts?.[0];
-      if (!from) throw new Error("Wallet connected but no account.");
+      if (!from) throw new Error("No account connected.");
       try {
         await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x2105" }] });
-      } catch {
-        await eth.request({
-          method: "wallet_addEthereumChain",
-          params: [{
-            chainId: "0x2105",
-            chainName: "Base",
-            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-            rpcUrls: ["https://mainnet.base.org"],
-            blockExplorerUrls: ["https://basescan.org"],
-          }],
-        });
-      }
-      const hash = await eth.request({
-        method: "eth_sendTransaction",
-        params: [{ from, to: USDC, data: transferData(PAY_TO, AMOUNT), value: "0x0" }],
+      } catch {}
+
+      const balHex = await eth.request({
+        method: "eth_call",
+        params: [{ to: USDC, data: "0x70a08231" + from.slice(2).toLowerCase().padStart(64, "0") }, "latest"],
       });
-      setOut(JSON.stringify({
-        paid: true,
-        amount: "0.05 USDC",
+      const usdc = Number(BigInt(balHex || "0x0")) / 1e6;
+      if (usdc < 0.05) {
+        setOut(JSON.stringify({
+          paid: false,
+          connected: from,
+          usdc_on_base: usdc,
+          error: "This is the empty account. In Base App switch to the wallet that actually holds USDC, reload, tap Pay.",
+        }, null, 2));
+        return;
+      }
+
+      const nonce = hexRand32();
+      const validBefore = String(Math.floor(Date.now() / 1000) + 3600);
+      const authorization = {
         from,
         to: PAY_TO,
-        token: USDC,
-        tx: hash,
-        basescan: "https://basescan.org/tx/" + hash,
-      }, null, 2));
+        value: AMOUNT,
+        validAfter: "0",
+        validBefore,
+        nonce,
+      };
+      const typed = {
+        types: {
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" },
+          ],
+          TransferWithAuthorization: [
+            { name: "from", type: "address" },
+            { name: "to", type: "address" },
+            { name: "value", type: "uint256" },
+            { name: "validAfter", type: "uint256" },
+            { name: "validBefore", type: "uint256" },
+            { name: "nonce", type: "bytes32" },
+          ],
+        },
+        primaryType: "TransferWithAuthorization",
+        domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: USDC },
+        message: authorization,
+      };
+      setOut("Sign $0.05 USDC. No ETH. No Coinbase.com.");
+      const signature = await eth.request({
+        method: "eth_signTypedData_v4",
+        params: [from, JSON.stringify(typed)],
+      });
+      const payload = {
+        x402Version: 2,
+        scheme: "exact",
+        network: "eip155:8453",
+        accepted: {
+          scheme: "exact",
+          network: "eip155:8453",
+          amount: AMOUNT,
+          maxAmountRequired: AMOUNT,
+          asset: USDC,
+          payTo: PAY_TO,
+          extra: { name: "USD Coin", version: "2" },
+        },
+        payload: { signature, authorization },
+      };
+      const header = b64(payload);
+      await mcp(
+        "get_quote",
+        { spec: query, ship_to_country: country, quantity: 1, max_price_usd: "200" },
+        { "PAYMENT-SIGNATURE": header, "X-PAYMENT": header }
+      );
     } catch (err: any) {
       setOut(JSON.stringify({
         paid: false,
         error: err?.message || String(err),
-        hint: "Open Base App on this phone, paste " + SITE + " in its browser, tap Pay. Needs a little ETH on Base for gas.",
+        hint: "You should see a SIGN sheet, not a send. If USDC shows $0, that connected account is empty — switch wallets in the app.",
       }, null, 2));
     } finally {
       setPaying(false);
     }
-  }
-
-  function openInBaseApp() {
-    const encoded = encodeURIComponent(SITE);
-    window.location.href = "cbwallet://dapp?url=" + encoded;
-    setTimeout(() => {
-      window.location.href = "https://go.cb-w.com/dapp?cb_url=" + encoded;
-    }, 800);
   }
 
   useEffect(() => {
@@ -120,13 +161,12 @@ export default function Page() {
           disabled={paying}
           style={{ background: "#f5c518", color: "#0b0d10", border: 0, padding: "10px 14px", fontWeight: 700 }}
         >
-          {paying ? "Confirm in wallet…" : "Pay $0.05 USDC"}
+          {paying ? "Sign in wallet…" : "Pay $0.05 USDC"}
         </button>
-        <button onClick={openInBaseApp}>Open in Base App</button>
       </div>
       <pre style={{ marginTop: 24, background: "#14181e", padding: 16, overflow: "auto", fontSize: 12 }}>{out}</pre>
       <p style={{ fontSize: 12, color: "#8b9098" }}>
-        Pay uses the wallet on this phone. Open the site inside Base App, then tap Pay. No Coinbase.com.
+        Sign only. No ETH. If it says empty, Base App connected the wrong account — switch to the one with USDC.
       </p>
     </main>
   );
