@@ -21,6 +21,9 @@ export type Offer = {
   product_url: string;
   checkout_url: string;
   confidence: number;
+  product_id?: string;
+  variant_id?: string;
+  source?: string;
 };
 
 export type Quote = {
