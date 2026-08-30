@@ -2,28 +2,16 @@
 import { useEffect, useState } from "react";
 
 const PAY_TO = "0xfa722a8f9d927bc340405a9eab67958ab767e7f5";
-const PAY_USD = "0.05";
+const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const AMOUNT = 50_000n; // 0.05 USDC, 6 decimals
+const SITE = "https://clearlot-hardware-hq.vercel.app";
 
-function loadScript(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if ((window as any).base?.pay) {
-      resolve();
-      return;
-    }
-    const existing = document.getElementById("base-account-sdk") as HTMLScriptElement | null;
-    if (existing) {
-      existing.addEventListener("load", () => resolve());
-      existing.addEventListener("error", () => reject(new Error("Base Pay script failed")));
-      return;
-    }
-    const s = document.createElement("script");
-    s.id = "base-account-sdk";
-    s.src = "https://unpkg.com/@base-org/account/dist/base-account.min.js";
-    s.async = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("Base Pay script failed to load"));
-    document.head.appendChild(s);
-  });
+function transferData(to: string, amount: bigint) {
+  return (
+    "0xa9059cbb" +
+    to.slice(2).toLowerCase().padStart(64, "0") +
+    amount.toString(16).padStart(64, "0")
+  );
 }
 
 export default function Page() {
@@ -45,22 +33,61 @@ export default function Page() {
 
   async function payNickel() {
     setPaying(true);
-    setOut("Opening Base Pay for $0.05 USDC…");
+    setOut("Requesting $0.05 USDC from the wallet on this phone…");
     try {
-      await loadScript();
-      const pay = (window as any).base?.pay;
-      if (!pay) throw new Error("Base Pay is not available. Open this page in Safari or Base App, then tap Pay.");
-      const result = await pay({ amount: PAY_USD, to: PAY_TO, testnet: false });
-      setOut(JSON.stringify({ paid: true, amount: PAY_USD, to: PAY_TO, result }, null, 2));
+      const eth = (window as any).ethereum;
+      if (!eth?.request) {
+        throw new Error(
+          "No wallet injected. Open Base App → browser → paste " + SITE + " → tap Pay. Do not use Grok or Coinbase.com."
+        );
+      }
+      const accounts: string[] = await eth.request({ method: "eth_requestAccounts" });
+      const from = accounts?.[0];
+      if (!from) throw new Error("Wallet connected but no account.");
+      try {
+        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x2105" }] });
+      } catch {
+        await eth.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: "0x2105",
+            chainName: "Base",
+            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+            rpcUrls: ["https://mainnet.base.org"],
+            blockExplorerUrls: ["https://basescan.org"],
+          }],
+        });
+      }
+      const hash = await eth.request({
+        method: "eth_sendTransaction",
+        params: [{ from, to: USDC, data: transferData(PAY_TO, AMOUNT), value: "0x0" }],
+      });
+      setOut(JSON.stringify({
+        paid: true,
+        amount: "0.05 USDC",
+        from,
+        to: PAY_TO,
+        token: USDC,
+        tx: hash,
+        basescan: "https://basescan.org/tx/" + hash,
+      }, null, 2));
     } catch (err: any) {
       setOut(JSON.stringify({
         paid: false,
         error: err?.message || String(err),
-        hint: "Coinbase Smart Wallet needs window.opener. Open this page in Safari or Base App (not Grok/in-app browser), then tap Pay.",
+        hint: "Open Base App on this phone, paste " + SITE + " in its browser, tap Pay. Needs a little ETH on Base for gas.",
       }, null, 2));
     } finally {
       setPaying(false);
     }
+  }
+
+  function openInBaseApp() {
+    const encoded = encodeURIComponent(SITE);
+    window.location.href = "cbwallet://dapp?url=" + encoded;
+    setTimeout(() => {
+      window.location.href = "https://go.cb-w.com/dapp?cb_url=" + encoded;
+    }, 800);
   }
 
   useEffect(() => {
@@ -93,12 +120,13 @@ export default function Page() {
           disabled={paying}
           style={{ background: "#f5c518", color: "#0b0d10", border: 0, padding: "10px 14px", fontWeight: 700 }}
         >
-          {paying ? "Opening Base Pay…" : "Pay $0.05 USDC"}
+          {paying ? "Confirm in wallet…" : "Pay $0.05 USDC"}
         </button>
+        <button onClick={openInBaseApp}>Open in Base App</button>
       </div>
       <pre style={{ marginTop: 24, background: "#14181e", padding: 16, overflow: "auto", fontSize: 12 }}>{out}</pre>
       <p style={{ fontSize: 12, color: "#8b9098" }}>
-        Pay in Safari or Base App. Grok/in-app browsers block Coinbase Smart Wallet (no window.opener).
+        Pay uses the wallet on this phone. Open the site inside Base App, then tap Pay. No Coinbase.com.
       </p>
     </main>
   );
