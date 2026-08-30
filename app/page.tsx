@@ -4,6 +4,28 @@ import { useEffect, useState } from "react";
 const PAY_TO = "0xfa722a8f9d927bc340405a9eab67958ab767e7f5";
 const PAY_USD = "0.05";
 
+function loadScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if ((window as any).base?.pay) {
+      resolve();
+      return;
+    }
+    const existing = document.getElementById("base-account-sdk") as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", () => reject(new Error("Base Pay script failed")));
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = "base-account-sdk";
+    s.src = "https://unpkg.com/@base-org/account/dist/base-account.min.js";
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Base Pay script failed to load"));
+    document.head.appendChild(s);
+  });
+}
+
 export default function Page() {
   const [query, setQuery] = useState("raspberry pi 5 kit");
   const [country, setCountry] = useState("US");
@@ -21,36 +43,13 @@ export default function Page() {
     return json;
   }
 
-  async function loadBasePay() {
-    const w = window as any;
-    if (w.base?.pay) return w.base.pay;
-    await new Promise<void>((resolve, reject) => {
-      const existing = document.getElementById("base-account-sdk");
-      if (existing) {
-        existing.addEventListener("load", () => resolve());
-        existing.addEventListener("error", () => reject(new Error("Base Pay script failed")));
-        if (w.base?.pay) resolve();
-        return;
-      }
-      const s = document.createElement("script");
-      s.id = "base-account-sdk";
-      s.src = "https://unpkg.com/@base-org/account/dist/base-account.min.js";
-      s.async = true;
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error("Base Pay script failed to load"));
-      document.head.appendChild(s);
-    });
-    if ((window as any).base?.pay) return (window as any).base.pay;
-    const mod: any = await import("https://esm.sh/@base-org/account");
-    return mod.pay || mod.base?.pay;
-  }
-
   async function payNickel() {
     setPaying(true);
     setOut("Opening Base Pay for $0.05 USDC…");
     try {
-      const pay = await loadBasePay();
-      if (!pay) throw new Error("Base Pay is not available. Open this page in Base App and tap Pay again.");
+      await loadScript();
+      const pay = (window as any).base?.pay;
+      if (!pay) throw new Error("Base Pay is not available. Open this page in Base App or Safari and tap Pay again.");
       const result = await pay({ amount: PAY_USD, to: PAY_TO, testnet: false });
       setOut(JSON.stringify({ paid: true, amount: PAY_USD, to: PAY_TO, result }, null, 2));
     } catch (err: any) {
