@@ -1,5 +1,16 @@
 # Clearlot log
 
+## 2026-08-30
+
+- Execution order: ship the first settled nickel. Do not write more doctrine.
+- Live tape: persist=true, intent_count moved 43 → 44 after post_intent `i_i8bnrutuycjb` (ISO 4766 A2-70 M6x20, spec_hash `iso4762 m6x20 a2 70`).
+- get_quote returns HTTP 402 with x402 v2 challenge, PayAI facilitator, payTo `0xfa722a8f9d927bc340405a9eab67958ab767e7f5`, 0.05 USDC on Base.
+- quote_mem still 0. No Bazaar index until first /verify or /settle.
+- Base Account is the payTo address. Portfolio on Base: $0.00 USDC.
+- initiate_x402_request blocked on insufficient_funds. Funding request `fb4c1cb5-2d11-498d-a40d-e39c7fae3895` wants 0.0505 USDC on Base, then the 402 call resumes.
+- Separate $5 USDC fund request opened so the wallet can settle ~100 quotes without another on-ramp.
+- @HardwareHQio still has not posted the MCP URL.
+
 ## 2026-08-29
 
 - Product defined: non-custodial hardware/MRO intent tape (HardwareHQ). Explicitly not OC Detailing.
@@ -15,8 +26,7 @@
 
 ## Open
 
-- First settled nickel (Bazaar index + wallet credit)
-- Put claimed Redis URL/token in Vercel env
+- First settled nickel (Bazaar index + wallet credit) — waiting on Base USDC
 - One public post of the MCP URL from @HardwareHQio
 - list_demand tool after more families exist
 
