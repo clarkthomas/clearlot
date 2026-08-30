@@ -1,5 +1,5 @@
 const PAY_TO = process.env.X402_PAY_TO || "0xfa722a8f9d927bc340405a9eab67958ab767e7f5";
-const QUOTE_USD = process.env.QUOTE_PRICE_USD || "0.05";
+const QUOTE_USD = process.env.QUOTE_PRICE_USD || "0.04";
 const NETWORK = process.env.X402_NETWORK || "base";
 const NETWORK_CAIP = process.env.X402_NETWORK_CAIP || "eip155:8453";
 const FACILITATOR = (process.env.X402_FACILITATOR_URL || "https://facilitator.payai.network").replace(/\/$/, "");
