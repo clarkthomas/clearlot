@@ -49,11 +49,15 @@ export default function Page() {
     try {
       await loadScript();
       const pay = (window as any).base?.pay;
-      if (!pay) throw new Error("Base Pay is not available. Open this page in Base App or Safari and tap Pay again.");
+      if (!pay) throw new Error("Base Pay is not available. Open this page in Safari or Base App, then tap Pay.");
       const result = await pay({ amount: PAY_USD, to: PAY_TO, testnet: false });
       setOut(JSON.stringify({ paid: true, amount: PAY_USD, to: PAY_TO, result }, null, 2));
     } catch (err: any) {
-      setOut(JSON.stringify({ paid: false, error: err?.message || String(err) }, null, 2));
+      setOut(JSON.stringify({
+        paid: false,
+        error: err?.message || String(err),
+        hint: "Coinbase Smart Wallet needs window.opener. Open this page in Safari or Base App (not Grok/in-app browser), then tap Pay.",
+      }, null, 2));
     } finally {
       setPaying(false);
     }
@@ -93,7 +97,9 @@ export default function Page() {
         </button>
       </div>
       <pre style={{ marginTop: 24, background: "#14181e", padding: 16, overflow: "auto", fontSize: 12 }}>{out}</pre>
-      <p style={{ fontSize: 12, color: "#8b9098" }}>MCP POST /mcp · unpaid quote = 402 · yellow button is temporary Base Pay</p>
+      <p style={{ fontSize: 12, color: "#8b9098" }}>
+        Pay in Safari or Base App. Grok/in-app browsers block Coinbase Smart Wallet (no window.opener).
+      </p>
     </main>
   );
 }
