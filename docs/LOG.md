@@ -1,5 +1,19 @@
 # Clearlot log
 
+## 2026-08-31 seed-02
+
+- Posted 40 free electronics intents (20 MPNs × seed-a/seed-b). Vertical `electronics`.
+- Tape intent_count 86 → 126. persist=true.
+- First electronics intent `i_93jmwu47w67a` spec_hash `stm32f411ceu6`.
+- open_pool on STM32F411CEU6: pool `p_z3owfm4cx3nq`, committed_qty 20, min_quantity 15, threshold_met.
+- Did not call get_quote. Did not tap /pay.
+- @HardwareHQio still has not posted the MCP URL. Draft in session artifacts.
+
+## 2026-08-31 bazaar
+
+- Listed. Resource https://clearlot-hardware-hq.vercel.app/mcp HTTP POST x402 v1 lastUpdated 2026-08-31T16:10:07.806Z quote q_s8imwd02pjjg.
+- Settle amount 40000 atomic ($0.04). Do not re-tap /pay.
+
 ## 2026-08-30
 
 - Execution order: ship the first settled nickel. Do not write more doctrine.
@@ -26,9 +40,10 @@
 
 ## Open
 
-- First settled nickel (Bazaar index + wallet credit) — waiting on Base USDC
 - One public post of the MCP URL from @HardwareHQio
-- list_demand tool after more families exist
+- Next dictionary: automotive OEM/aftermarket numbers
+- list_demand tool after more overlapping hashes exist
+- Homepage / PLAYBOOK / schemas still say $0.05 while settle is $0.04 — copy drift
 
 ## 2026-08-29 seed-01
 
