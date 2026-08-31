@@ -12,11 +12,21 @@ const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Accept, MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID, payment-signature, PAYMENT-SIGNATURE, x-payment, PAYMENT-REQUIRED",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-  "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version, PAYMENT-RESPONSE",
+  "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version, PAYMENT-RESPONSE, EXTENSION-RESPONSES",
 };
 function mcpResult(id: unknown, result: unknown) { return { jsonrpc: "2.0", id: id ?? 1, result }; }
 function mcpError(id: unknown, message: string, code = -32000) { return { jsonrpc: "2.0", id: id ?? 1, error: { code, message } }; }
 function toolContent(data: unknown, isError = false) { return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, isError }; }
+
+function decodeExt(raw: unknown) {
+  if (!raw || typeof raw !== "string") return raw || null;
+  try {
+    const s = raw.includes("{") ? raw : Buffer.from(raw, "base64").toString("utf8");
+    return JSON.parse(s);
+  } catch {
+    return raw;
+  }
+}
 
 async function runTool(name: string, args: any, req: NextRequest) {
   if (name === "post_intent") {
@@ -43,9 +53,16 @@ async function runTool(name: string, args: any, req: NextRequest) {
       const settled = await settlePayment(header);
       if (!settled.settled) {
         const err: any = new Error("Payment Required");
-        err.http = 402; err.body = { ...challenge(), settlement: settled }; throw err;
+        err.http = 402;
+        err.body = { error: "Payment Required", reason: settled.reason, listing: decodeExt(settled.extensionResponses), settlement: settled };
+        throw err;
       }
-      args._settlement = { facilitator: settled.facilitator, settle: settled.settle };
+      args._settlement = {
+        facilitator: settled.facilitator,
+        settle: settled.settle,
+        listing: decodeExt(settled.extensionResponses),
+        verifyTries: settled.verifyTries || null,
+      };
     }
     let spec = String(args.spec || "");
     let country = String(args.ship_to_country || "US");
@@ -58,7 +75,7 @@ async function runTool(name: string, args: any, req: NextRequest) {
     const quote_id = id("q");
     const expires_at = new Date(Date.now() + Number(process.env.QUOTE_TTL_SECONDS || 1800) * 1000).toISOString();
     await putQuote({ quote_id, intent_id: args.intent_id, expires_at, paid: true, offers });
-    return { quote_id, expires_at, catalog_error: error || null, offers, settlement: args._settlement || null };
+    return { quote_id, expires_at, catalog_error: error || null, listing: args._settlement?.listing || null, offers, settlement: args._settlement || null };
   }
   if (name === "open_checkout") {
     const q = await getQuote(String(args.quote_id));
