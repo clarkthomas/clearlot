@@ -13,9 +13,60 @@ const bazaarInfo = {
     toolName: "get_quote",
     description: "Live hardware/MRO quote. Returns merchant offers. Does not place orders.",
     transport: "streamable-http",
-    inputSchema: { type: "object", properties: { spec: { type: "string" }, intent_id: { type: "string" }, ship_to_country: { type: "string" }, quantity: { type: "integer" } } },
+    inputSchema: {
+      type: "object",
+      properties: {
+        spec: { type: "string" },
+        intent_id: { type: "string" },
+        ship_to_country: { type: "string" },
+        quantity: { type: "integer" },
+      },
+    },
+    example: { spec: "raspberry pi 5 kit", ship_to_country: "US", quantity: 1 },
   },
-  output: { type: "json", example: { quote_id: "q_x", offers: [{ merchant_domain: "example.com", unit_price_usd: "12.40" }] } },
+  output: {
+    type: "json",
+    example: { quote_id: "q_x", offers: [{ merchant_domain: "example.com", unit_price_usd: "12.40" }] },
+  },
+};
+
+const bazaarSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {
+    input: {
+      type: "object",
+      properties: {
+        type: { type: "string", const: "mcp" },
+        toolName: { type: "string" },
+        description: { type: "string" },
+        transport: { type: "string", enum: ["streamable-http", "sse"] },
+        inputSchema: { type: "object" },
+        example: { type: "object" },
+      },
+      required: ["type", "toolName", "inputSchema"],
+      additionalProperties: false,
+    },
+    output: {
+      type: "object",
+      properties: {
+        type: { type: "string" },
+        example: { type: "object" },
+      },
+      required: ["type"],
+    },
+  },
+  required: ["input"],
+};
+
+export const bazaarExtension = { info: bazaarInfo, schema: bazaarSchema };
+
+const resourceInfo = {
+  url: RESOURCE,
+  description: "Clearlot live hardware/MRO quotes",
+  mimeType: "application/json",
+  serviceName: "Clearlot",
+  tags: ["hardware", "mro", "mcp", "quotes"],
 };
 
 function requirement(network: string) {
@@ -41,11 +92,11 @@ export function requirements() {
 
 export function challenge() {
   return {
-    x402Version: 1,
+    x402Version: 2,
     error: "Payment Required",
     accepts: [requirement(NETWORK), requirement(NETWORK_CAIP)],
-    resource: { url: RESOURCE, description: "Clearlot live hardware/MRO quotes", mimeType: "application/json", serviceName: "Clearlot", tags: ["hardware", "mro", "mcp", "quotes"] },
-    extensions: { bazaar: { info: bazaarInfo } },
+    resource: resourceInfo,
+    extensions: { bazaar: bazaarExtension },
   };
 }
 
@@ -72,7 +123,11 @@ async function postFacilitator(path: string, body: unknown) {
   } catch {
     json = { raw: text };
   }
-  return { ok: res.ok, status: res.status, json, headers: Object.fromEntries(res.headers.entries()) };
+  const headers: Record<string, string> = {};
+  res.headers.forEach((v, k) => {
+    headers[k.toLowerCase()] = v;
+  });
+  return { ok: res.ok, status: res.status, json, headers };
 }
 
 function decodeHeader(header: string) {
@@ -92,23 +147,47 @@ function asPaymentPayload(decoded: any) {
   return decoded;
 }
 
+function withBazaar(payload: any) {
+  if (!payload || typeof payload !== "object") return payload;
+  return {
+    ...payload,
+    x402Version: payload.x402Version || 2,
+    resource: payload.resource || resourceInfo,
+    extensions: { bazaar: bazaarExtension },
+  };
+}
+
+function extHeader(h: Record<string, string> | undefined) {
+  return h?.["extension-responses"] || h?.["extension-response"] || "";
+}
+
 export async function settlePayment(header: string) {
   if (!header) return { settled: false, reason: "missing_payment_header" };
   const decoded = decodeHeader(header);
-  const paymentPayload = asPaymentPayload(decoded);
-  const accepted = paymentPayload?.accepted || (typeof paymentPayload === "object" && paymentPayload.network === NETWORK_CAIP ? requirement(NETWORK_CAIP) : requirement(NETWORK));
+  const raw = asPaymentPayload(decoded);
+  const paymentPayload = withBazaar(raw);
+  const accepted =
+    paymentPayload?.accepted && paymentPayload.accepted.payTo
+      ? paymentPayload.accepted
+      : requirement(typeof paymentPayload?.network === "string" ? paymentPayload.network : NETWORK);
   const attempts = [
-    { x402Version: 1, paymentPayload, paymentRequirements: requirement(NETWORK), serverExtensions: { bazaar: { info: bazaarInfo } } },
-    { x402Version: 1, paymentPayload, paymentRequirements: accepted },
-    { x402Version: 2, paymentPayload, paymentRequirements: requirement(NETWORK_CAIP), serverExtensions: { bazaar: { info: bazaarInfo } } },
-    { x402Version: 2, paymentPayload, paymentRequirements: accepted, serverExtensions: { bazaar: { info: bazaarInfo } } },
+    { x402Version: 2, paymentPayload, paymentRequirements: requirement(NETWORK_CAIP), serverExtensions: { bazaar: bazaarExtension } },
+    { x402Version: 2, paymentPayload, paymentRequirements: requirement(NETWORK), serverExtensions: { bazaar: bazaarExtension } },
+    { x402Version: 2, paymentPayload, paymentRequirements: accepted, serverExtensions: { bazaar: bazaarExtension } },
+    { x402Version: 1, paymentPayload: { ...paymentPayload, x402Version: 1, network: NETWORK }, paymentRequirements: requirement(NETWORK), serverExtensions: { bazaar: bazaarExtension } },
   ];
   const verifyTries: any[] = [];
   let chosen: any = null;
   let verify: any = null;
   for (const body of attempts) {
     const v = await postFacilitator("/verify", body);
-    verifyTries.push({ version: body.x402Version, network: body.paymentRequirements?.network, status: v.status, json: v.json, ext: v.headers?.["extension-responses"] || v.headers?.["EXTENSION-RESPONSES"] });
+    verifyTries.push({
+      version: body.x402Version,
+      network: body.paymentRequirements?.network,
+      status: v.status,
+      json: v.json,
+      ext: extHeader(v.headers),
+    });
     if (v.json?.isValid === true) {
       chosen = body;
       verify = v;
@@ -132,7 +211,7 @@ export async function settlePayment(header: string) {
     reason: ok ? "settled" : settle.json?.errorReason || settle.json?.invalidReason || "settle_failed",
     verify: verify.json,
     settle: settle.json,
-    extensionResponses: settle.headers?.["extension-responses"] || verify.headers?.["extension-responses"],
+    extensionResponses: extHeader(settle.headers) || extHeader(verify.headers),
     facilitator: FACILITATOR,
     verifyTries,
   };
