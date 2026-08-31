@@ -13,13 +13,58 @@ export const TOOLS = [
         ship_to_country: { type: "string" },
         deadline: { type: "string" },
         agent_id: { type: "string" },
-        vertical: { type: "string", description: "hardware | marine | drone | electronics" },
+        vertical: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "post_offer",
+    description: "Record a vendor ask against a spec hash. Free. No inventory held here. Merchant stays merchant of record.",
+    inputSchema: {
+      type: "object",
+      required: ["spec", "unit_price_usd", "quantity", "merchant_url", "ships_to_country"],
+      properties: {
+        spec: { type: "string" },
+        mpn: { type: "string" },
+        unit_price_usd: { type: "string" },
+        quantity: { type: "integer", minimum: 1 },
+        merchant_url: { type: "string" },
+        merchant_domain: { type: "string" },
+        ships_to_country: { type: "string" },
+        firm: { type: "boolean" },
+        lead_days: { type: "integer" },
+        expires_at: { type: "string" },
+        agent_id: { type: "string" },
+        vertical: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "list_demand",
+    description: "Read clustered buy-side hashes with intent and offer counts. Signal only. Not a fill.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "integer" },
+        spec_hash: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "cover_intent",
+    description: "Attach a posted offer to a buy intent. No deposits. No order placement.",
+    inputSchema: {
+      type: "object",
+      required: ["intent_id", "offer_id"],
+      properties: {
+        intent_id: { type: "string" },
+        offer_id: { type: "string" },
       },
     },
   },
   {
     name: "search_supply",
-    description: "Unpriced supply scan. Results may be stale.",
+    description: "Unpriced supply scan. Results may be stale. Merges catalog rails later.",
     inputSchema: {
       type: "object",
       required: ["query", "ship_to_country"],
@@ -32,12 +77,13 @@ export const TOOLS = [
   },
   {
     name: "get_quote",
-    description: "Live quote. Returns 402 unless x402 payment or QUOTE_OPEN=1. Does not place orders.",
+    description: "Live quote. Returns 402 unless x402 payment or QUOTE_OPEN=1. Mixes vendor offers and catalog. Does not place orders.",
     inputSchema: {
       type: "object",
       properties: {
         intent_id: { type: "string" },
         spec: { type: "string" },
+        mpn: { type: "string" },
         quantity: { type: "integer" },
         max_price_usd: { type: "string" },
         ship_to_country: { type: "string" },
