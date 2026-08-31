@@ -7,26 +7,31 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const RESOURCE = "https://clearlot-hardware-hq.vercel.app/mcp";
 const ATOMIC = String(Math.round(Number(QUOTE_USD) * 1e6));
 
+const httpBodyExample = {
+  jsonrpc: "2.0",
+  id: 1,
+  method: "tools/call",
+  params: {
+    name: "get_quote",
+    arguments: { spec: "raspberry pi 5 kit", ship_to_country: "US", quantity: 1 },
+  },
+};
+
+const quoteExample = {
+  quote_id: "q_x",
+  offers: [{ merchant_domain: "example.com", unit_price_usd: "12.40" }],
+};
+
 const bazaarInfo = {
   input: {
-    type: "mcp",
-    toolName: "get_quote",
-    description: "Live hardware/MRO quote. Returns merchant offers. Does not place orders.",
-    transport: "streamable-http",
-    inputSchema: {
-      type: "object",
-      properties: {
-        spec: { type: "string" },
-        intent_id: { type: "string" },
-        ship_to_country: { type: "string" },
-        quantity: { type: "integer" },
-      },
-    },
-    example: { spec: "raspberry pi 5 kit", ship_to_country: "US", quantity: 1 },
+    type: "http",
+    method: "POST",
+    bodyType: "json",
+    body: httpBodyExample,
   },
   output: {
     type: "json",
-    example: { quote_id: "q_x", offers: [{ merchant_domain: "example.com", unit_price_usd: "12.40" }] },
+    example: quoteExample,
   },
 };
 
@@ -37,15 +42,14 @@ const bazaarSchema = {
     input: {
       type: "object",
       properties: {
-        type: { type: "string", const: "mcp" },
-        toolName: { type: "string" },
-        description: { type: "string" },
-        transport: { type: "string", enum: ["streamable-http", "sse"] },
-        inputSchema: { type: "object" },
-        example: { type: "object" },
+        type: { type: "string", const: "http" },
+        method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] },
+        bodyType: { type: "string", enum: ["json", "form-data", "text"] },
+        body: { type: "object" },
+        queryParams: { type: "object" },
+        headerFields: { type: "object" },
       },
-      required: ["type", "toolName", "inputSchema"],
-      additionalProperties: false,
+      required: ["type", "method"],
     },
     output: {
       type: "object",
@@ -63,7 +67,7 @@ export const bazaarExtension = { info: bazaarInfo, schema: bazaarSchema };
 
 const resourceInfo = {
   url: RESOURCE,
-  description: "Clearlot live hardware/MRO quotes",
+  description: "Clearlot live hardware/MRO quotes via get_quote",
   mimeType: "application/json",
   serviceName: "Clearlot",
   tags: ["hardware", "mro", "mcp", "quotes"],
@@ -81,8 +85,17 @@ function requirement(network: string) {
     payTo: PAY_TO,
     asset: USDC_BASE,
     maxTimeoutSeconds: 300,
-    extra: { name: "USD Coin", version: "2", assetTransferMethod: "eip3009", quote_price_usd: QUOTE_USD },
-    outputSchema: bazaarInfo,
+    extra: { name: "USD Coin", version: "2" },
+    outputSchema: {
+      input: {
+        type: "http",
+        method: "POST",
+        discoverable: true,
+        bodyType: "json",
+        description: "Clearlot get_quote over MCP JSON-RPC",
+      },
+      output: { type: "json", example: quoteExample },
+    },
   };
 }
 
@@ -147,18 +160,25 @@ function asPaymentPayload(decoded: any) {
   return decoded;
 }
 
+function resourceUrl(value: unknown) {
+  if (typeof value === "string" && value.startsWith("http")) return value;
+  if (value && typeof value === "object" && typeof (value as any).url === "string") return (value as any).url;
+  return RESOURCE;
+}
+
 function withBazaar(payload: any) {
   if (!payload || typeof payload !== "object") return payload;
   return {
     ...payload,
     x402Version: payload.x402Version || 2,
-    resource: payload.resource || resourceInfo,
+    resource: resourceUrl(payload.resource),
     extensions: { bazaar: bazaarExtension },
   };
 }
 
 function extHeader(h: Record<string, string> | undefined) {
-  return h?.["extension-responses"] || h?.["extension-response"] || "";
+  if (!h) return "";
+  return h["extension-responses"] || h["extension-response"] || h["x-extension-responses"] || "";
 }
 
 export async function settlePayment(header: string) {
@@ -168,13 +188,13 @@ export async function settlePayment(header: string) {
   const paymentPayload = withBazaar(raw);
   const accepted =
     paymentPayload?.accepted && paymentPayload.accepted.payTo
-      ? paymentPayload.accepted
+      ? { ...paymentPayload.accepted, resource: resourceUrl(paymentPayload.accepted.resource), outputSchema: requirement(NETWORK).outputSchema }
       : requirement(typeof paymentPayload?.network === "string" ? paymentPayload.network : NETWORK);
   const attempts = [
-    { x402Version: 2, paymentPayload, paymentRequirements: requirement(NETWORK_CAIP), serverExtensions: { bazaar: bazaarExtension } },
-    { x402Version: 2, paymentPayload, paymentRequirements: requirement(NETWORK), serverExtensions: { bazaar: bazaarExtension } },
-    { x402Version: 2, paymentPayload, paymentRequirements: accepted, serverExtensions: { bazaar: bazaarExtension } },
-    { x402Version: 1, paymentPayload: { ...paymentPayload, x402Version: 1, network: NETWORK }, paymentRequirements: requirement(NETWORK), serverExtensions: { bazaar: bazaarExtension } },
+    { x402Version: 1, paymentPayload: { ...paymentPayload, x402Version: 1, network: NETWORK, resource: RESOURCE }, paymentRequirements: requirement(NETWORK) },
+    { x402Version: 2, paymentPayload, paymentRequirements: requirement(NETWORK_CAIP) },
+    { x402Version: 2, paymentPayload, paymentRequirements: requirement(NETWORK) },
+    { x402Version: 2, paymentPayload, paymentRequirements: accepted },
   ];
   const verifyTries: any[] = [];
   let chosen: any = null;
@@ -187,6 +207,7 @@ export async function settlePayment(header: string) {
       status: v.status,
       json: v.json,
       ext: extHeader(v.headers),
+      headerKeys: Object.keys(v.headers || {}),
     });
     if (v.json?.isValid === true) {
       chosen = body;
