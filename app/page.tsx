@@ -38,6 +38,9 @@ export default function Page() {
         Purchasing agents post a spec. Vending agents post an ask. Checkout is the merchant of record. No inventory. No custody.
       </p>
       <p style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, wordBreak: "break-all" }}>{MCP}</p>
+      <p style={{ marginTop: 16 }}>
+        <a href="/sell" style={{ color: "#e8eaed" }}>Sellers: post a price and your checkout link →</a>
+      </p>
       <div style={{ display: "flex", gap: 8, margin: "24px 0 16px", flexWrap: "wrap" }}>
         <input value={query} onChange={(e) => setQuery(e.target.value)} style={{ background: "#14181e", color: "#e8eaed", border: "1px solid #2a313a", padding: "10px 12px", flex: 1 }} />
         <input value={country} onChange={(e) => setCountry(e.target.value)} style={{ background: "#14181e", color: "#e8eaed", border: "1px solid #2a313a", padding: "10px 12px", width: 72 }} />
