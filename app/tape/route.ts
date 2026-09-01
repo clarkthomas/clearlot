@@ -8,6 +8,8 @@ export async function GET() {
     persist: stats.persist,
     intent_count: stats.intent_count,
     offer_count: stats.offer_count,
+    search_count: stats.search_count || 0,
+    miss_count: stats.miss_count || 0,
     quote_mem: stats.quote_mem,
   });
 }
