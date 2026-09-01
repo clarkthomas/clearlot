@@ -222,8 +222,8 @@ async function runTool(name: string, args: any) {
     const merged = [...vendorOffers, ...catalogOffers];
     const quote_id = id("q");
     const expires_at = new Date(Date.now() + Number(process.env.QUOTE_TTL_SECONDS || 1800) * 1000).toISOString();
-    await putQuote({ quote_id, intent_id: args.intent_id || search.intent_id, expires_at, paid: true, offers: merged });
-    return { quote_id, expires_at, spec_hash, miss: search.miss, search_id: search.search_id, intent_id: search.intent_id || args.intent_id || null, catalog_error: error || null, paid: true, offers: merged };
+    await putQuote({ quote_id, intent_id: args.intent_id || search.intent_id, expires_at, paid: false, offers: merged });
+    return { quote_id, expires_at, spec_hash, miss: search.miss, search_id: search.search_id, intent_id: search.intent_id || args.intent_id || null, catalog_error: error || null, paid: false, offers: merged };
   }
   if (name === "open_checkout") {
     const q = await getQuote(String(args.quote_id));
@@ -261,8 +261,6 @@ function respond(req: NextRequest, payload: unknown, status = 200, extra: Record
 
 export async function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 export async function GET(req: NextRequest) {
-  const gate = await gatePayment(req);
-  if (!gate.ok) return respond(req, gate.body, 402);
   const accept = req.headers.get("accept") || "";
   if (accept.includes("text/event-stream")) {
     return new NextResponse(`: clearlot ready\n\n`, { status: 200, headers: { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "MCP-Protocol-Version": PROTOCOL } });
@@ -271,8 +269,6 @@ export async function GET(req: NextRequest) {
 }
 export async function DELETE() { return new NextResponse(null, { status: 204, headers: cors }); }
 export async function POST(req: NextRequest) {
-  const gate = await gatePayment(req);
-  if (!gate.ok) return respond(req, gate.body, 402);
   const body = await req.json().catch(() => null);
   if (!body) return respond(req, mcpError(null, "invalid json"), 400);
   const method = body.method as string;
@@ -281,8 +277,8 @@ export async function POST(req: NextRequest) {
     return respond(req, mcpResult(rpcId, {
       protocolVersion: PROTOCOL,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "clearlot", version: "0.3.1", title: "Clearlot" },
-      instructions: "Specified-commerce tape. Unpaid MCP is x402. Valid PAYMENT-SIGNATURE / X-PAYMENT settles then serves. Checkout is the merchant of record. No inventory. No merchandise custody.",
+      serverInfo: { name: "clearlot", version: "0.3.2", title: "Clearlot" },
+      instructions: "Specified RFQ tape. Free search and quote. post_offer / list_demand / cover_intent open. Checkout is the merchant of record. No inventory. No merchandise custody.",
     }), 200, { "Mcp-Session-Id": id("sess") });
   }
   if (method === "notifications/initialized" || method === "notifications/cancelled") return new NextResponse(null, { status: 202, headers: cors });
