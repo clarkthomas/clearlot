@@ -197,6 +197,25 @@ function idsFrom(products: any[]): string[] {
   return [...new Set(ids)];
 }
 
+export function specTokens(query: string): string[] {
+  return query
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length >= 3);
+}
+
+export function matchingCatalogHits(query: string, offers: CatalogOffer[]): CatalogOffer[] {
+  const tokens = specTokens(query);
+  if (!tokens.length) return [];
+  return offers.filter((o) => {
+    const hay = `${o.title} ${o.product_url} ${o.checkout_url} ${o.merchant_domain}`.toLowerCase();
+    const compact = hay.replace(/[^a-z0-9]+/g, "");
+    return tokens.every((t) => hay.includes(t) || compact.includes(t));
+  });
+}
+
 export async function searchCatalog(
   query: string,
   country: string,
@@ -264,24 +283,6 @@ export async function searchCatalog(
         }
       } catch (e) {
         errors.push(`lookup:${String(e)}`);
-      }
-
-      const detailed = await Promise.allSettled(
-        topIds.slice(0, 6).map((id) =>
-          rpc(GLOBAL, "get_product", {
-            id,
-            context: context(country),
-            filters: { ships_to: { country }, available: true },
-          })
-        )
-      );
-      for (const r of detailed) {
-        if (r.status !== "fulfilled" || r.value.json?.error) continue;
-        const dets = collectProducts(r.value.json);
-        if (dets.length) {
-          offers = offers.concat(explodeOffers(dets, country, "get_product"));
-          if (!sources.includes("get_product")) sources.push("get_product");
-        }
       }
     }
   }
