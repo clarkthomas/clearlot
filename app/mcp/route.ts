@@ -16,7 +16,7 @@ import {
   recordSearch,
 } from "@/lib/store";
 import { matchingCatalogHits, searchCatalog } from "@/lib/catalog";
-import { challenge } from "@/lib/x402";
+import { challenge, paymentHeaderFrom, settlePayment } from "@/lib/x402";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -25,11 +25,21 @@ const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Accept, MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID, payment-signature, PAYMENT-SIGNATURE, x-payment, PAYMENT-REQUIRED",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-  "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version, PAYMENT-RESPONSE, EXTENSION-RESPONSES",
+  "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version, PAYMENT-RESPONSE, EXTENSION-RESPONSES, PAYMENT-REQUIRED",
 };
 function mcpResult(id: unknown, result: unknown) { return { jsonrpc: "2.0", id: id ?? 1, result }; }
 function mcpError(id: unknown, message: string, code = -32000) { return { jsonrpc: "2.0", id: id ?? 1, error: { code, message } }; }
 function toolContent(data: unknown, isError = false) { return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, isError }; }
+
+function decodeExt(raw: unknown) {
+  if (!raw || typeof raw !== "string") return raw || null;
+  try {
+    const s = raw.includes("{") ? raw : Buffer.from(raw, "base64").toString("utf8");
+    return JSON.parse(s);
+  } catch {
+    return raw;
+  }
+}
 
 function domainOf(url: string, fallback = "") {
   try {
@@ -37,6 +47,19 @@ function domainOf(url: string, fallback = "") {
   } catch {
     return fallback;
   }
+}
+
+async function gatePayment(req: NextRequest) {
+  const header = paymentHeaderFrom(req);
+  if (!header) return { ok: false as const, body: challenge() };
+  const settled = await settlePayment(header);
+  if (!settled.settled) {
+    return {
+      ok: false as const,
+      body: { error: "Payment Required", reason: settled.reason, listing: decodeExt(settled.extensionResponses), settlement: settled },
+    };
+  }
+  return { ok: true as const, settled };
 }
 
 async function runTool(name: string, args: any) {
@@ -199,8 +222,8 @@ async function runTool(name: string, args: any) {
     const merged = [...vendorOffers, ...catalogOffers];
     const quote_id = id("q");
     const expires_at = new Date(Date.now() + Number(process.env.QUOTE_TTL_SECONDS || 1800) * 1000).toISOString();
-    await putQuote({ quote_id, intent_id: args.intent_id || search.intent_id, expires_at, paid: false, offers: merged });
-    return { quote_id, expires_at, spec_hash, miss: search.miss, search_id: search.search_id, intent_id: search.intent_id || args.intent_id || null, catalog_error: error || null, paid: false, offers: merged };
+    await putQuote({ quote_id, intent_id: args.intent_id || search.intent_id, expires_at, paid: true, offers: merged });
+    return { quote_id, expires_at, spec_hash, miss: search.miss, search_id: search.search_id, intent_id: search.intent_id || args.intent_id || null, catalog_error: error || null, paid: true, offers: merged };
   }
   if (name === "open_checkout") {
     const q = await getQuote(String(args.quote_id));
@@ -238,6 +261,8 @@ function respond(req: NextRequest, payload: unknown, status = 200, extra: Record
 
 export async function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 export async function GET(req: NextRequest) {
+  const gate = await gatePayment(req);
+  if (!gate.ok) return respond(req, gate.body, 402);
   const accept = req.headers.get("accept") || "";
   if (accept.includes("text/event-stream")) {
     return new NextResponse(`: clearlot ready\n\n`, { status: 200, headers: { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "MCP-Protocol-Version": PROTOCOL } });
@@ -246,6 +271,8 @@ export async function GET(req: NextRequest) {
 }
 export async function DELETE() { return new NextResponse(null, { status: 204, headers: cors }); }
 export async function POST(req: NextRequest) {
+  const gate = await gatePayment(req);
+  if (!gate.ok) return respond(req, gate.body, 402);
   const body = await req.json().catch(() => null);
   if (!body) return respond(req, mcpError(null, "invalid json"), 400);
   const method = body.method as string;
@@ -254,8 +281,8 @@ export async function POST(req: NextRequest) {
     return respond(req, mcpResult(rpcId, {
       protocolVersion: PROTOCOL,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "clearlot", version: "0.3.0", title: "Clearlot" },
-      instructions: "Specified-commerce tape. Quotes are free. Every search is written to the tape. Checkout is the merchant of record. No inventory. No merchandise custody.",
+      serverInfo: { name: "clearlot", version: "0.3.1", title: "Clearlot" },
+      instructions: "Specified-commerce tape. Unpaid MCP is x402. Valid PAYMENT-SIGNATURE / X-PAYMENT settles then serves. Checkout is the merchant of record. No inventory. No merchandise custody.",
     }), 200, { "Mcp-Session-Id": id("sess") });
   }
   if (method === "notifications/initialized" || method === "notifications/cancelled") return new NextResponse(null, { status: 202, headers: cors });
@@ -268,6 +295,7 @@ export async function POST(req: NextRequest) {
       const data = await runTool(body.params?.name, body.params?.arguments || {});
       return respond(req, mcpResult(rpcId, toolContent(data)));
     } catch (e: any) {
+      if (e.http === 402) return respond(req, mcpResult(rpcId, toolContent(e.body, true)), 402);
       return respond(req, mcpResult(rpcId, toolContent({ error: String(e.message || e) }, true)), 200);
     }
   }
