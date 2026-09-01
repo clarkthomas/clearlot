@@ -13,13 +13,13 @@ import {
   listPostedOffers,
   putCover,
   listDemand,
+  recordSearch,
 } from "@/lib/store";
-import { searchCatalog } from "@/lib/catalog";
-import { challenge, paymentHeaderFrom, settlePayment } from "@/lib/x402";
+import { matchingCatalogHits, searchCatalog } from "@/lib/catalog";
+import { challenge } from "@/lib/x402";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-const QUOTE_OPEN = process.env.QUOTE_OPEN === "1";
 const PROTOCOL = "2025-06-18";
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -31,16 +31,6 @@ function mcpResult(id: unknown, result: unknown) { return { jsonrpc: "2.0", id: 
 function mcpError(id: unknown, message: string, code = -32000) { return { jsonrpc: "2.0", id: id ?? 1, error: { code, message } }; }
 function toolContent(data: unknown, isError = false) { return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, isError }; }
 
-function decodeExt(raw: unknown) {
-  if (!raw || typeof raw !== "string") return raw || null;
-  try {
-    const s = raw.includes("{") ? raw : Buffer.from(raw, "base64").toString("utf8");
-    return JSON.parse(s);
-  } catch {
-    return raw;
-  }
-}
-
 function domainOf(url: string, fallback = "") {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -49,7 +39,7 @@ function domainOf(url: string, fallback = "") {
   }
 }
 
-async function runTool(name: string, args: any, req: NextRequest) {
+async function runTool(name: string, args: any) {
   if (name === "post_intent") {
     const spec = String(args.spec || "");
     const intent_id = id("i");
@@ -65,6 +55,7 @@ async function runTool(name: string, args: any, req: NextRequest) {
       spec_hash,
       vertical: String(args.vertical || "hardware"),
       created_at: new Date().toISOString(),
+      source: "post_intent",
     };
     await putIntent(rec);
     return { intent_id, spec_hash, vertical: rec.vertical, expires_at: rec.deadline, custody: false };
@@ -99,12 +90,12 @@ async function runTool(name: string, args: any, req: NextRequest) {
     if (args.spec_hash) {
       const spec_hash = String(args.spec_hash);
       const offers = await listPostedOffers(spec_hash, 20);
-      const rows = await listDemand(200);
-      const row = rows.find((r) => r.spec_hash === spec_hash) || { spec_hash, intent_count: 0, offer_count: offers.length };
-      return { spec_hash, intent_count: row.intent_count, offer_count: row.offer_count, offers: offers.map((o) => ({ offer_id: o.offer_id, unit_price_usd: o.unit_price_usd, quantity: o.quantity, merchant_domain: o.merchant_domain, merchant_url: o.merchant_url, firm: o.firm, lead_days: o.lead_days })), fill: false };
+      const rows = await listDemand(400);
+      const row = rows.find((r) => r.spec_hash === spec_hash) || { spec_hash, intent_count: 0, offer_count: offers.length, search_count: 0, miss_count: 0 };
+      return { spec_hash, intent_count: row.intent_count, offer_count: row.offer_count, search_count: row.search_count || 0, miss_count: row.miss_count || 0, offers: offers.map((o) => ({ offer_id: o.offer_id, unit_price_usd: o.unit_price_usd, quantity: o.quantity, merchant_domain: o.merchant_domain, merchant_url: o.merchant_url, firm: o.firm, lead_days: o.lead_days })), fill: false };
     }
     const hashes = await listDemand(Math.min(50, Number(args.limit || 20)));
-    return { hashes, fill: false, note: "counts are signals. a paid quote is true only if checkout could have filled." };
+    return { hashes, fill: false, note: "counts are signals. checkout is the merchant of record." };
   }
   if (name === "cover_intent") {
     const it = await getIntent(String(args.intent_id || ""));
@@ -138,6 +129,16 @@ async function runTool(name: string, args: any, req: NextRequest) {
     const spec_hash = hashSpec(query);
     const posted = await listPostedOffers(spec_hash, Number(args.limit || 5));
     const { offers, error } = await searchCatalog(query, country);
+    const matched = matchingCatalogHits(query, offers);
+    const search = await recordSearch({
+      spec: query,
+      spec_hash,
+      quantity: Number(args.quantity || 1),
+      ship_to_country: country,
+      source: "search_supply",
+      catalog_hits: matched.length,
+      vendor_hits: posted.length,
+    });
     const vendor = posted.map((o) => ({
       title: o.spec,
       merchant_domain: o.merchant_domain,
@@ -147,7 +148,7 @@ async function runTool(name: string, args: any, req: NextRequest) {
       source: "vendor_offer",
       firm: o.firm,
     }));
-    const catalog = offers.slice(0, Number(args.limit || 5)).map((o) => ({
+    const catalog = matched.slice(0, Number(args.limit || 5)).map((o) => ({
       title: o.title,
       merchant_domain: o.merchant_domain,
       price_usd: o.unit_price_usd,
@@ -155,29 +156,9 @@ async function runTool(name: string, args: any, req: NextRequest) {
       product_url: o.product_url,
       source: o.source || "catalog",
     }));
-    return { priced: false, error: error || null, results: [...vendor, ...catalog].slice(0, Number(args.limit || 5)) };
+    return { priced: false, miss: search.miss, search_id: search.search_id, intent_id: search.intent_id || null, spec_hash, error: error || null, results: [...vendor, ...catalog].slice(0, Number(args.limit || 5)) };
   }
   if (name === "get_quote") {
-    if (!QUOTE_OPEN) {
-      const header = paymentHeaderFrom(req);
-      if (!header) {
-        const err: any = new Error("Payment Required");
-        err.http = 402; err.body = challenge(); throw err;
-      }
-      const settled = await settlePayment(header);
-      if (!settled.settled) {
-        const err: any = new Error("Payment Required");
-        err.http = 402;
-        err.body = { error: "Payment Required", reason: settled.reason, listing: decodeExt(settled.extensionResponses), settlement: settled };
-        throw err;
-      }
-      args._settlement = {
-        facilitator: settled.facilitator,
-        settle: settled.settle,
-        listing: decodeExt(settled.extensionResponses),
-        verifyTries: settled.verifyTries || null,
-      };
-    }
     let spec = String(args.spec || "");
     let country = String(args.ship_to_country || "US");
     let spec_hash = hashSpec(spec, args.mpn);
@@ -192,6 +173,16 @@ async function runTool(name: string, args: any, req: NextRequest) {
     if (!spec) return { error: "spec or intent_id required" };
     const posted = await listPostedOffers(spec_hash, 8);
     const { offers, error } = await searchCatalog(spec, country);
+    const matched = matchingCatalogHits(spec, offers);
+    const search = await recordSearch({
+      spec,
+      spec_hash,
+      quantity: Number(args.quantity || 1),
+      ship_to_country: country,
+      source: "get_quote",
+      catalog_hits: matched.length,
+      vendor_hits: posted.length,
+    });
     const vendorOffers = posted.map((o, i) => ({
       rank: i + 1,
       merchant_domain: o.merchant_domain,
@@ -204,11 +195,12 @@ async function runTool(name: string, args: any, req: NextRequest) {
       confidence: o.firm ? 0.8 : 0.5,
       source: "vendor_offer",
     }));
-    const merged = [...vendorOffers, ...offers];
+    const catalogOffers = matched.map((o, i) => ({ ...o, rank: vendorOffers.length + i + 1 }));
+    const merged = [...vendorOffers, ...catalogOffers];
     const quote_id = id("q");
     const expires_at = new Date(Date.now() + Number(process.env.QUOTE_TTL_SECONDS || 1800) * 1000).toISOString();
-    await putQuote({ quote_id, intent_id: args.intent_id, expires_at, paid: true, offers: merged });
-    return { quote_id, expires_at, spec_hash, catalog_error: error || null, listing: args._settlement?.listing || null, offers: merged, settlement: args._settlement || null };
+    await putQuote({ quote_id, intent_id: args.intent_id || search.intent_id, expires_at, paid: false, offers: merged });
+    return { quote_id, expires_at, spec_hash, miss: search.miss, search_id: search.search_id, intent_id: search.intent_id || args.intent_id || null, catalog_error: error || null, paid: false, offers: merged };
   }
   if (name === "open_checkout") {
     const q = await getQuote(String(args.quote_id));
@@ -262,8 +254,8 @@ export async function POST(req: NextRequest) {
     return respond(req, mcpResult(rpcId, {
       protocolVersion: PROTOCOL,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "clearlot", version: "0.2.0", title: "Clearlot" },
-      instructions: "Specified-commerce tape. Purchasing agents post_intent. Vending agents post_offer and cover_intent. list_demand is a signal. get_quote is x402 on Base USDC. Checkout is the merchant of record. No inventory. No merchandise custody.",
+      serverInfo: { name: "clearlot", version: "0.3.0", title: "Clearlot" },
+      instructions: "Specified-commerce tape. Quotes are free. Every search is written to the tape. Checkout is the merchant of record. No inventory. No merchandise custody.",
     }), 200, { "Mcp-Session-Id": id("sess") });
   }
   if (method === "notifications/initialized" || method === "notifications/cancelled") return new NextResponse(null, { status: 202, headers: cors });
@@ -273,10 +265,9 @@ export async function POST(req: NextRequest) {
   if (method === "prompts/list") return respond(req, mcpResult(rpcId, { prompts: [] }));
   if (method === "tools/call") {
     try {
-      const data = await runTool(body.params?.name, body.params?.arguments || {}, req);
+      const data = await runTool(body.params?.name, body.params?.arguments || {});
       return respond(req, mcpResult(rpcId, toolContent(data)));
     } catch (e: any) {
-      if (e.http === 402) return respond(req, mcpResult(rpcId, toolContent(e.body, true)), 402);
       return respond(req, mcpResult(rpcId, toolContent({ error: String(e.message || e) }, true)), 200);
     }
   }
