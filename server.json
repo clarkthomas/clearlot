@@ -1,9 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.clarkthomas/clearlot",
-  "description": "Live hardware/MRO quotes for agents. x402 get_quote. Merchant checkout. No custody.",
+  "title": "Clearlot",
+  "description": "Specified RFQ tape for purchasing and vending agents. Free search and quote. Missed MPN, aftermarket, OEM, and second-source specs stay on the tape. Merchant checkout. No inventory. No custody.",
   "status": "active",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "repository": {
     "url": "https://github.com/clarkthomas/clearlot",
     "source": "github"

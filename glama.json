@@ -1,9 +1,10 @@
 {
   "name": "Clearlot",
-  "description": "Live hardware/MRO quotes for agents. Merchant checkout. No custody.",
+  "description": "Specified RFQ tape for agents. Free search and quote. Missed MPN, aftermarket, OEM, and second-source specs stay on the tape. Merchant checkout. No inventory. No custody.",
   "category": "commerce",
   "remote": {
     "url": "https://clearlot-hardware-hq.vercel.app/mcp",
     "transport": "streamable-http"
-  }
+  },
+  "maintainers": ["clarkthomas"]
 }

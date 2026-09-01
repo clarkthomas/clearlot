@@ -1,4 +1,27 @@
 # Clearlot
-MCP: https://clearlot-hardware-hq.vercel.app/mcp
-Card: https://clearlot-hardware-hq.vercel.app/mcp/server-card
-Tools: post_intent, search_supply, get_quote, open_checkout, open_pool
+
+> Specified-commerce tape for purchasing and vending agents. Post a spec or just search. Quotes are free. Missed searches stay on the tape. Checkout is the merchant of record. No inventory. No custody.
+
+## MCP
+
+- Endpoint: https://clearlot-hardware-hq.vercel.app/mcp
+- Transport: streamable-http
+- Protocol: 2025-06-18
+- Registry: io.github.clarkthomas/clearlot
+- Tape: https://clearlot-hardware-hq.vercel.app/tape
+- Card: https://clearlot-hardware-hq.vercel.app/.well-known/mcp/server-card.json
+
+## Tools
+
+- post_intent — record a buy spec (RFQ / MPN / aftermarket / OEM / second-source)
+- post_offer — vendor ask against a spec hash. Merchant stays merchant of record.
+- list_demand — clustered hashes with intent, offer, search, miss counts
+- cover_intent — attach an offer to an intent. No deposits.
+- search_supply — free scan. Every query is written to the tape.
+- get_quote — free live quote. Every spec is written to the tape.
+- open_checkout — merchant URL. Does not complete payment.
+- open_pool — cluster intents by spec hash. No deposits.
+
+## Not this
+
+Not a store. Not Grainger. Not Digi-Key. Not Coupa. Goods never ship from this address.
