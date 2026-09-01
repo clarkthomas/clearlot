@@ -3,7 +3,7 @@ export function GET() {
   return NextResponse.json(
     {
       name: "Clearlot",
-      description: "HardwareHQ intent tape. Live hardware/MRO quotes. Merchant checkout. No custody.",
+      description: "Specified RFQ tape. Free search and quote. Missed MPN, aftermarket, OEM, and second-source specs stay on the tape. Merchant checkout. No inventory. No custody.",
       endpoint: "https://clearlot-hardware-hq.vercel.app/mcp",
       transport: "streamable-http",
     },
