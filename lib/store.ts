@@ -9,6 +9,7 @@ export type Intent = {
   spec_hash: string;
   vertical: string;
   created_at: string;
+  source?: string;
 };
 
 export type Offer = {
@@ -68,6 +69,20 @@ export type Pool = {
   intent_ids: string[];
 };
 
+export type SearchEvent = {
+  search_id: string;
+  spec: string;
+  spec_hash: string;
+  quantity: number;
+  ship_to_country: string;
+  source: string;
+  catalog_hits: number;
+  vendor_hits: number;
+  miss: boolean;
+  intent_id?: string;
+  created_at: string;
+};
+
 const URL = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || "https://popular-grub-229280.upstash.io";
 const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || "gQAAAAAAA3-gAQIgcDJhY2IyMGQ3NTk4MGM0MzRhYjkyZWQwNjY1NDk2NTFjZg";
 
@@ -77,6 +92,7 @@ const mem = {
   pools: new Map<string, Pool>(),
   posted: new Map<string, PostedOffer>(),
   covers: new Map<string, Cover>(),
+  searches: new Map<string, SearchEvent>(),
 };
 
 async function redis(cmd: unknown[]) {
@@ -159,16 +175,73 @@ export async function putCover(rec: Cover) {
   await redis(["SADD", `covers:${rec.intent_id}`, rec.cover_id]);
 }
 
+export async function recordSearch(input: {
+  spec: string;
+  spec_hash: string;
+  quantity?: number;
+  ship_to_country?: string;
+  source: string;
+  catalog_hits: number;
+  vendor_hits: number;
+}) {
+  const miss = input.catalog_hits + input.vendor_hits === 0;
+  const rec: SearchEvent = {
+    search_id: id("s"),
+    spec: input.spec,
+    spec_hash: input.spec_hash,
+    quantity: Number(input.quantity || 1),
+    ship_to_country: String(input.ship_to_country || "US"),
+    source: input.source,
+    catalog_hits: input.catalog_hits,
+    vendor_hits: input.vendor_hits,
+    miss,
+    created_at: new Date().toISOString(),
+  };
+  mem.searches.set(rec.search_id, rec);
+  await redis(["SET", `search:${rec.search_id}`, JSON.stringify(rec), "EX", "2592000"]);
+  await redis(["SADD", "searches", rec.search_id]);
+  await redis(["INCR", "search_count"]);
+  await redis(["INCR", `searchhash:${rec.spec_hash}`]);
+  await redis(["SADD", "hashes", rec.spec_hash]);
+  if (miss) {
+    await redis(["INCR", "miss_count"]);
+    await redis(["INCR", `misshash:${rec.spec_hash}`]);
+    const existing = await redis(["GET", `missintent:${rec.spec_hash}`]);
+    if (!existing) {
+      const intent: Intent = {
+        intent_id: id("i"),
+        spec: rec.spec,
+        quantity: rec.quantity,
+        max_price_usd: "0",
+        ship_to_country: rec.ship_to_country,
+        deadline: new Date(Date.now() + 86400000).toISOString(),
+        spec_hash: rec.spec_hash,
+        vertical: "search_miss",
+        created_at: rec.created_at,
+        source: rec.source,
+      };
+      await putIntent(intent);
+      rec.intent_id = intent.intent_id;
+      await redis(["SET", `missintent:${rec.spec_hash}`, intent.intent_id, "EX", "86400"]);
+    } else {
+      rec.intent_id = String(existing);
+    }
+  }
+  return rec;
+}
+
 export async function listDemand(limit = 20) {
   const hashes = ((await redis(["SMEMBERS", "hashes"])) as string[] | null) || [];
   const rows = [];
-  for (const spec_hash of hashes.slice(0, 200)) {
+  for (const spec_hash of hashes.slice(0, 400)) {
     const intents = Number(await redis(["SCARD", `hash:${spec_hash}`])) || 0;
     const offers = Number(await redis(["SCARD", `offerhash:${spec_hash}`])) || 0;
-    if (intents + offers === 0) continue;
-    rows.push({ spec_hash, intent_count: intents, offer_count: offers });
+    const searches = Number(await redis(["GET", `searchhash:${spec_hash}`])) || 0;
+    const misses = Number(await redis(["GET", `misshash:${spec_hash}`])) || 0;
+    if (intents + offers + searches === 0) continue;
+    rows.push({ spec_hash, intent_count: intents, offer_count: offers, search_count: searches, miss_count: misses });
   }
-  return rows.sort((a, b) => b.intent_count + b.offer_count - (a.intent_count + a.offer_count)).slice(0, limit);
+  return rows.sort((a, b) => b.search_count + b.intent_count + b.offer_count - (a.search_count + a.intent_count + a.offer_count)).slice(0, limit);
 }
 
 export async function putQuote(rec: Quote) {
@@ -202,12 +275,16 @@ export async function upsertPool(spec_hash: string, intent_id: string, min_quant
 export async function tapeStats() {
   const n = await redis(["SCARD", "intents"]);
   const o = await redis(["SCARD", "offers"]);
+  const s = await redis(["GET", "search_count"]);
+  const m = await redis(["GET", "miss_count"]);
   return {
     persist: Boolean(URL && TOKEN),
     intent_count: typeof n === "number" ? n : mem.intents.size,
     offer_count: typeof o === "number" ? o : mem.posted.size,
+    search_count: Number(s || 0),
+    miss_count: Number(m || 0),
     quote_mem: mem.quotes.size,
   };
 }
 
-export const db = { intents: mem.intents, quotes: mem.quotes, pools: mem.pools, posted: mem.posted, covers: mem.covers };
+export const db = { intents: mem.intents, quotes: mem.quotes, pools: mem.pools, posted: mem.posted, covers: mem.covers, searches: mem.searches };

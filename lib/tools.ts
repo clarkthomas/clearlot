@@ -41,7 +41,7 @@ export const TOOLS = [
   },
   {
     name: "list_demand",
-    description: "Read clustered buy-side hashes with intent and offer counts. Signal only. Not a fill.",
+    description: "Read clustered hashes with intent, offer, search, and miss counts. Signal only. Not a fill.",
     inputSchema: {
       type: "object",
       properties: {
@@ -64,7 +64,7 @@ export const TOOLS = [
   },
   {
     name: "search_supply",
-    description: "Unpriced supply scan. Results may be stale. Merges catalog rails later.",
+    description: "Free supply scan. Every query is written to the demand tape. Misses become implicit intents.",
     inputSchema: {
       type: "object",
       required: ["query", "ship_to_country"],
@@ -77,7 +77,7 @@ export const TOOLS = [
   },
   {
     name: "get_quote",
-    description: "Live quote. Returns 402 unless x402 payment or QUOTE_OPEN=1. Mixes vendor offers and catalog. Does not place orders.",
+    description: "Free live quote. Mixes vendor offers and catalog. Every spec is written to the demand tape. Does not place orders.",
     inputSchema: {
       type: "object",
       properties: {
